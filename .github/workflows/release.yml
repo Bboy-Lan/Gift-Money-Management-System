@@ -33,9 +33,18 @@ jobs:
           # The local release reuses the fixed runtime already stored beside the app.
           # GitHub Actions uses the WebView2 bootstrapper so a clean checkout does not
           # need to carry the user's large local runtime directory.
-          $override = '{"bundle":{"windows":{"webviewInstallMode":{"type":"embedBootstrapper"}}}}'
-          Set-Content -Path tauri.ci.conf.json -Value $override -Encoding utf8
-          npm run tauri -- build --config tauri.ci.conf.json
+          $configPath = "src-tauri/tauri.conf.json"
+          $backupPath = "src-tauri/tauri.conf.release-backup.json"
+          Copy-Item $configPath $backupPath
+          try {
+            $config = Get-Content $configPath -Raw | ConvertFrom-Json
+            $config.bundle.windows.webviewInstallMode = [pscustomobject]@{ type = "embedBootstrapper" }
+            $config | ConvertTo-Json -Depth 20 | Set-Content -Path $configPath -Encoding utf8
+            npm run tauri -- build
+          } finally {
+            Copy-Item -Force $backupPath $configPath
+            Remove-Item -Force $backupPath
+          }
       - name: Prepare release files
         shell: pwsh
         run: |
