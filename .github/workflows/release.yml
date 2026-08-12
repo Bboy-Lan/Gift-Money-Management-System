@@ -49,8 +49,9 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
-          $installer = "礼金簿管理_${version}_x64-setup.exe"
-          $source = "src-tauri/target/release/bundle/nsis/$installer"
+          $builtInstaller = "礼金簿管理_${version}_x64-setup.exe"
+          $installer = "Gift-Money-Management-System_${version}_x64-setup.exe"
+          $source = "src-tauri/target/release/bundle/nsis/$builtInstaller"
           Copy-Item $source $installer
           $hash = (Get-FileHash $installer -Algorithm SHA256).Hash
           "$hash  $installer" | Set-Content SHA256SUMS.txt -Encoding ascii
@@ -64,7 +65,7 @@ jobs:
         with:
           body_path: RELEASE_NOTES.md
           files: |
-            礼金簿管理_*.exe
+            Gift-Money-Management-System_*.exe
             SHA256SUMS.txt
             CHANGELOG.md
             RELEASE_NOTES.md

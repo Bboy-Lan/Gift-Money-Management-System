@@ -1,4 +1,15 @@
-export const CURRENT_RELEASE_NOTES = `## 0.3.84 - 2026-08-13
+export const CURRENT_RELEASE_NOTES = `## 0.3.85 - 2026-08-13
+
+### 修复问题
+- 修复 GitHub Windows 发布资产中文文件名在上传过程中被截断的问题。
+- GitHub 更新改用稳定的 ASCII 安装包名 `Gift-Money-Management-System_<版本>_x64-setup.exe` 并继续执行 SHA-256 校验；本地桌面发布包仍使用中文名称。
+
+### 兼容性说明
+- 本地礼金库、礼金簿、管理员配置和 \`webview2-fixed\` 不受影响。
+
+---
+
+## 0.3.84 - 2026-08-13
 
 ### 修复问题
 - 修复 GitHub Actions 发布构建的 WebView2 配置，使正式 Release 能够生成可验证的 Windows 安装包。

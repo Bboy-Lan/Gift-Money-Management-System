@@ -69,7 +69,8 @@ test("settings has a general/about split and a confirmed GitHub update flow", as
   assert.match(rust, /Gift-Money-Management-System\/releases\/latest/);
   assert.match(rust, /SHA256SUMS\.txt/);
   assert.match(rust, /release_notes: release\.body\.clone\(\)/);
-  assert.match(releaseNotes, /## 0\.3\.83/);
+  assert.match(releaseNotes, /## 0\.3\.85/);
+  assert.match(rust, /GITHUB_UPDATE_INSTALLER_PREFIX/);
 });
 
 test("ledger visual spacing keeps the first metric accent visible and gives history actions room", async () => {

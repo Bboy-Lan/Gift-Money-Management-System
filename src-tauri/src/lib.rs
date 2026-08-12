@@ -26,6 +26,7 @@ const LOGIN_COOLDOWN: Duration = Duration::from_secs(30);
 const MAX_LOGIN_ATTEMPTS: u8 = 5;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const UPDATE_INSTALLER_PREFIX: &str = "礼金簿管理_";
+const GITHUB_UPDATE_INSTALLER_PREFIX: &str = "Gift-Money-Management-System_";
 const UPDATE_INSTALLER_SUFFIX: &str = "_x64-setup.exe";
 const GITHUB_RELEASE_API: &str =
     "https://api.github.com/repos/Bboy-Lan/Gift-Money-Management-System/releases/latest";
@@ -289,7 +290,7 @@ fn candidate_from_github_release(
             release.tag_name
         ));
     }
-    let file_name = format!("{UPDATE_INSTALLER_PREFIX}{version}{UPDATE_INSTALLER_SUFFIX}");
+    let file_name = format!("{GITHUB_UPDATE_INSTALLER_PREFIX}{version}{UPDATE_INSTALLER_SUFFIX}");
     let installer = release
         .assets
         .iter()
