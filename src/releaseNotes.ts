@@ -1,4 +1,14 @@
-export const CURRENT_RELEASE_NOTES = `## 0.3.83 - 2026-08-13
+export const CURRENT_RELEASE_NOTES = `## 0.3.84 - 2026-08-13
+
+### 修复问题
+- 修复 GitHub Actions 发布构建的 WebView2 配置，使正式 Release 能够生成可验证的 Windows 安装包。
+
+### 兼容性说明
+- 本地发布仍复用 \`D:\\Desktop\\礼金簿管理系统\\webview2-fixed\`，不修改礼金库文件、备份和管理员配置。
+
+---
+
+## 0.3.83 - 2026-08-13
 
 ### 新增功能
 - 设置页新增“关于”页面，集中展示版本、仓库、协议、作者和更新状态。
