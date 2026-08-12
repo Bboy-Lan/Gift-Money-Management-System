@@ -45,3 +45,9 @@ PowerShell 脚本策略可能阻止 `npm.ps1`，项目统一使用 `npm.cmd`。�
 ## 数据安全边界
 
 程序不使用账号、网络同步、云端业务存储或本地 HTTP 服务。网络仅用于用户主动点击“检查更新”时读取 GitHub Releases；礼金业务数据仍保存在本机 `.giftvault` 文件中。请把 `.giftvault` 文件和备份视为家庭隐私数据，不要提交到 Git 或公开分享。
+
+## 关于与发布
+
+- 代码仓库：<https://github.com/Bboy-Lan/Gift-Money-Management-System>
+- 许可证：MIT，见项目根目录 `LICENSE`。
+- 每个版本的更新说明保存在 `CHANGELOG.md`，并同步到对应 GitHub Release Notes。
