@@ -57,9 +57,9 @@ h1 { margin: 3px 0 0; font-size: 25px; letter-spacing: .04em; }
 .settings-heading p, .settings-panel p { margin: 0; color: #71818d; font-size: 12px; line-height: 1.65; }
 .settings-panel { display: grid; gap: 14px; padding: 17px; border: 1px solid #d9e2e4; background: #fff; }
 .settings-panel strong { color: #354856; font-size: 13px; }
-.settings-layout { display: grid; grid-template-columns: 156px minmax(0, 1fr); gap: 18px; align-items: start; }
-.settings-nav { display: grid; gap: 5px; padding: 6px; border: 1px solid #dce5e6; background: #f7faf9; }
-.settings-nav button { display: flex; align-items: center; gap: 8px; min-height: 38px; padding: 0 11px; color: #60727a; background: transparent; border: 1px solid transparent; text-align: left; font-size: 12px; }
+.settings-layout { display: block; }
+.settings-nav { display: inline-flex; gap: 4px; padding: 4px; margin-bottom: 15px; border: 1px solid #dce5e6; background: #f7faf9; }
+.settings-nav button { display: inline-flex; align-items: center; gap: 8px; min-height: 34px; padding: 0 14px; color: #60727a; background: transparent; border: 1px solid transparent; text-align: left; font-size: 12px; }
 .settings-nav button:hover { color: #1f668b; background: #eef6f7; }
 .settings-nav button.active { color: #155f62; border-color: #b9d6d0; background: #e4f2ef; font-weight: 700; }
 .settings-content { min-width: 0; display: grid; gap: 14px; }
@@ -495,13 +495,14 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .tag-search-field input::placeholder { color: #93a0a5; font-weight: 400; }
 .file-info-wrap { position: relative; z-index: 31; }
 .offline-pill { min-height: 34px; padding: 0 7px; color: #4d6268; }
-.file-info-popover { position: absolute; top: calc(100% + 8px); right: 0; z-index: 50; width: min(370px, 42vw); display: grid; gap: 10px; padding: 14px; border: 1px solid #ccd8db; background: #fff; box-shadow: 0 12px 28px rgba(39, 57, 64, .14); }
+.file-info-popover { position: absolute; top: calc(100% + 8px); right: 0; z-index: 50; width: min(320px, 42vw); display: grid; gap: 8px; padding: 12px; border: 1px solid #ccd8db; background: #fff; box-shadow: 0 12px 28px rgba(39, 57, 64, .14); }
 .file-info-popover strong { font-size: 13px; }
 .file-path { overflow-wrap: anywhere; color: #6d7c83; font-family: "Segoe UI", sans-serif; font-size: 11px; line-height: 1.45; }
 .role-badge { justify-self: start; padding: 3px 7px; border-radius: 3px; font-size: 11px; font-weight: 700; }
 .role-badge.admin { color: #17635c; background: #e5f3f0; }
 .role-badge.viewer { color: #637178; background: #edf1f2; }
-.popover-actions { display: flex; gap: 7px; padding-top: 3px; border-top: 1px solid #edf1f2; }
+.popover-actions { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 3px; border-top: 1px solid #edf1f2; }
+.continuous-registration-button.active { color: #195c57; border-color: #77aaa4; background: #e7f4f1; }
 .search-results { position: absolute; top: calc(100% + 7px); right: 0; width: 360px; max-height: min(520px, calc(100vh - 84px)); overflow: auto; border: 1px solid #ccd8db; background: #fff; box-shadow: 0 14px 32px rgba(39, 57, 64, .15); color: #57666e; font-size: 12px; }
 .search-result { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; color: #26353d; text-align: left; border: 0; border-bottom: 1px solid #edf1f2; background: #fff; }
 .search-result:hover { background: #f0f7f6; }

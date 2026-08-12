@@ -73,6 +73,26 @@ test("settings has a general/about split and a confirmed GitHub update flow", as
   assert.match(rust, /GITHUB_UPDATE_INSTALLER_PREFIX/);
 });
 
+test("settings navigation is horizontal and local-mode popover keeps only mode and continuous registration", async () => {
+  const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
+
+  assert.match(styles, /\.settings-layout \{ display: block; \}/);
+  assert.match(styles, /\.settings-nav \{ display: inline-flex/);
+  const popover = source.slice(source.indexOf('className="file-info-popover"'), source.indexOf('className="file-info-popover"') + 2200);
+  assert.match(popover, /持续登记/);
+  assert.doesNotMatch(popover, /软件更新|修改 PIN/);
+});
+
+test("continuous registration reopens a cleared entry form after a successful save", async () => {
+  const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.match(source, /continuousRegistration/);
+  assert.match(source, /setEntryFormKey\(\(key\) => key \+ 1\)/);
+  assert.match(source, /登记成功，请继续登记下一条礼金/);
+  assert.match(source, /key=\{entryFormKey\}/);
+  assert.match(source, /onStopContinuousRegistration/);
+});
+
 test("ledger visual spacing keeps the first metric accent visible and gives history actions room", async () => {
   const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 
