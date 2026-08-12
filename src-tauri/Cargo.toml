@@ -1,0 +1,30 @@
+[package]
+name = "lijin-book"
+version = "0.3.83"
+description = "Offline family gift ledger for Windows"
+authors = ["Codex"]
+edition = "2021"
+
+[lib]
+name = "lijin_book_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["clock", "serde"] }
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+rfd = "0.15"
+calamine = "0.36"
+rust_xlsxwriter = "0.97"
+csv = "1.4"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+sha2 = "0.10"
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }

@@ -1,0 +1,61 @@
+name: Release 礼金簿管理
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate tag version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart('v')
+          $packageVersion = (Get-Content package.json | ConvertFrom-Json).version
+          $cargoVersion = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"$').Matches.Groups[1].Value
+          $tauriVersion = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          if ($tag -ne $packageVersion -or $tag -ne $cargoVersion -or $tag -ne $tauriVersion) { throw "Tag and project versions do not match." }
+      - name: Build installer
+        shell: pwsh
+        run: |
+          # The local release reuses the fixed runtime already stored beside the app.
+          # GitHub Actions uses the WebView2 bootstrapper so a clean checkout does not
+          # need to carry the user's large local runtime directory.
+          $override = '{"bundle":{"windows":{"webviewInstallMode":{"type":"embedBootstrapper"}}}}'
+          Set-Content -Path tauri.ci.conf.json -Value $override -Encoding utf8
+          npm run tauri -- build --config tauri.ci.conf.json
+      - name: Prepare release files
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $installer = "礼金簿管理_${version}_x64-setup.exe"
+          $source = "src-tauri/target/release/bundle/nsis/$installer"
+          Copy-Item $source $installer
+          $hash = (Get-FileHash $installer -Algorithm SHA256).Hash
+          "$hash  $installer" | Set-Content SHA256SUMS.txt -Encoding ascii
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $pattern = "(?ms)^##\s+v?$([regex]::Escape($version))\s+-.*?(?=^##\s+|\z)"
+          $match = [regex]::Match($changelog, $pattern)
+          if (-not $match.Success) { throw "CHANGELOG.md is missing release notes for $version." }
+          $match.Value.Trim() | Set-Content RELEASE_NOTES.md -Encoding utf8
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          files: |
+            礼金簿管理_*.exe
+            SHA256SUMS.txt
+            CHANGELOG.md
+            RELEASE_NOTES.md

@@ -1,0 +1,21 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/webview2-fixed/
+*.giftvault
+*.giftvault-*
+*.log
+.DS_Store
+.codex/
+ui-check.png
+ui-dev-check.png
+# Internal agent/session and audit artifacts are not part of the public source release.
+AGENTS.md
+audit-report.md
+findings.md
+progress.md
+remediation-log.md
+remediation-plan.md
+task_plan.md
+docs/
