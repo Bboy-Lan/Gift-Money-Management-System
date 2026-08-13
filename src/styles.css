@@ -64,10 +64,6 @@ h1 { margin: 3px 0 0; font-size: 25px; letter-spacing: .04em; }
 .settings-nav button.active { color: #155f62; border-color: #b9d6d0; background: #e4f2ef; font-weight: 700; }
 .settings-content { min-width: 0; display: grid; gap: 14px; }
 .about-page { display: grid; gap: 14px; }
-.about-hero { display: flex; align-items: center; gap: 12px; padding: 4px 2px 8px; }
-.about-mark { display: grid; place-items: center; width: 48px; height: 48px; color: #176b68; background: #e3f2ef; border: 1px solid #b7d8d1; }
-.about-hero h3 { margin: 3px 0 2px; color: #263747; font-size: 22px; }
-.about-hero p { margin: 0; color: #7b8991; font-size: 12px; }
 .about-card { display: grid; gap: 12px; padding: 17px; border: 1px solid #d9e2e4; background: #fff; }
 .about-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
 .about-card-heading > div { display: grid; gap: 4px; }
