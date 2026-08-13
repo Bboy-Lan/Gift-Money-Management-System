@@ -82,6 +82,8 @@ test("settings navigation is horizontal and local-mode popover keeps only mode a
   const popover = source.slice(source.indexOf('className="file-info-popover"'), source.indexOf('className="file-info-popover"') + 2200);
   assert.match(popover, /持续登记/);
   assert.doesNotMatch(popover, /软件更新|修改 PIN/);
+  assert.match(source, /continuousRegistration, setContinuousRegistration\] = useState\(true\)/);
+  assert.match(source, /管理员模式.*用户模式/);
 });
 
 test("continuous registration reopens a cleared entry form after a successful save", async () => {
