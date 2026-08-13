@@ -1711,17 +1711,20 @@ fn open_local_update_directory(app: tauri::AppHandle) -> Result<(), String> {
 
 fn local_update_launcher_script(
     installer: &Path,
-    application: &Path,
+    installed_application: &Path,
+    fallback_application: &Path,
     old_process_id: u32,
     log_path: &Path,
 ) -> String {
     let installer = powershell_path_literal(installer);
-    let application = powershell_path_literal(application);
+    let installed_application = powershell_path_literal(installed_application);
+    let fallback_application = powershell_path_literal(fallback_application);
     let log_path = powershell_path_literal(log_path);
     format!(
         r#"$ErrorActionPreference = 'Stop'
 $installer = {installer}
-$application = {application}
+$installedApplication = {installed_application}
+$fallbackApplication = {fallback_application}
 $oldProcessId = {old_process_id}
 $log = {log_path}
 $exitCode = 1
@@ -1736,12 +1739,26 @@ try {{
   $process = Start-Process -FilePath $installer -ArgumentList @('/S') -Wait -PassThru
   $exitCode = $process.ExitCode
   Add-Content -LiteralPath $log -Value "$(Get-Date -Format o) installer exit code: $exitCode"
+  if ($exitCode -ne 0) {{
+    throw "The installer exited with code $exitCode."
+  }}
 }} catch {{
   $exitCode = 1
   Add-Content -LiteralPath $log -Value "$(Get-Date -Format o) updater error: $($_.Exception.Message)"
 }} finally {{
-  if (Test-Path -LiteralPath $application) {{
-    Start-Process -FilePath $application
+  $launchTarget = if ($exitCode -eq 0) {{ $installedApplication }} else {{ $fallbackApplication }}
+  if (!(Test-Path -LiteralPath $launchTarget)) {{
+    $launchTarget = if ($exitCode -eq 0) {{ $fallbackApplication }} else {{ $installedApplication }}
+  }}
+  if (Test-Path -LiteralPath $launchTarget) {{
+    try {{
+      Start-Process -FilePath $launchTarget
+      Add-Content -LiteralPath $log -Value "$(Get-Date -Format o) started application: $launchTarget"
+    }} catch {{
+      Add-Content -LiteralPath $log -Value "$(Get-Date -Format o) application start error: $($_.Exception.Message)"
+    }}
+  }} else {{
+    Add-Content -LiteralPath $log -Value "$(Get-Date -Format o) application not found: $installedApplication; fallback: $fallbackApplication"
   }}
 }}
 exit $exitCode
@@ -1759,7 +1776,11 @@ fn windows_powershell_script_bytes(script: &str) -> Vec<u8> {
     bytes
 }
 
-fn launch_local_update(installer: &Path, application: &Path) -> Result<(), String> {
+fn launch_local_update(
+    installer: &Path,
+    installed_application: &Path,
+    fallback_application: &Path,
+) -> Result<(), String> {
     // A separate script waits for the app to exit before NSIS replaces its executable.
     let directory = update_runtime_directory();
     std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
@@ -1769,7 +1790,8 @@ fn launch_local_update(installer: &Path, application: &Path) -> Result<(), Strin
         &script_path,
         windows_powershell_script_bytes(&local_update_launcher_script(
             installer,
-            application,
+            installed_application,
+            fallback_application,
             std::process::id(),
             &log_path,
         )),
@@ -1866,7 +1888,8 @@ async fn start_local_update(app: tauri::AppHandle) -> Result<(), String> {
         return Err("没有检测到更高版本的礼金簿管理安装包".to_string());
     };
     let application = std::env::current_exe().map_err(|e| format!("无法确定当前程序位置: {e}"))?;
-    launch_local_update(&installer, &application)
+    let installed_application = installed_application_path();
+    launch_local_update(&installer, &installed_application, &application)
         .map_err(|e| format!("无法启动 v{} 更新安装包: {e}", candidate.version))?;
     app.exit(0);
     Ok(())
@@ -6856,6 +6879,7 @@ mod tests {
     fn update_launcher_embeds_escaped_paths_without_positional_powershell_arguments() {
         let script = local_update_launcher_script(
             Path::new(r"C:\Users\Updater\updates\礼金簿管理_0.3.1_x64-setup.exe"),
+            Path::new(r"C:\Users\Updater\AppData\Local\礼金簿管理\礼金簿管理.exe"),
             Path::new(r"C:\Program Files\lijin-book\lijin-book.exe"),
             4242,
             Path::new(r"C:\Users\Updater\updates\update.log"),
@@ -6864,11 +6888,16 @@ mod tests {
         assert!(script.contains(
             "$installer = 'C:\\Users\\Updater\\updates\\礼金簿管理_0.3.1_x64-setup.exe'"
         ));
-        assert!(script.contains("$application = 'C:\\Program Files\\lijin-book\\lijin-book.exe'"));
+        assert!(script.contains(
+            "$installedApplication = 'C:\\Users\\Updater\\AppData\\Local\\礼金簿管理\\礼金簿管理.exe'"
+        ));
+        assert!(script
+            .contains("$fallbackApplication = 'C:\\Program Files\\lijin-book\\lijin-book.exe'"));
         assert!(script.contains("$oldProcessId = 4242"));
         assert!(script.contains("Get-Process -Id $oldProcessId"));
         assert!(script.contains("Start-Process -FilePath $installer"));
-        assert!(script.contains("Start-Process -FilePath $application"));
+        assert!(script.contains("$launchTarget = if ($exitCode -eq 0) { $installedApplication } else { $fallbackApplication }"));
+        assert!(script.contains("Start-Process -FilePath $launchTarget"));
         assert!(!script.contains("$args"));
     }
 

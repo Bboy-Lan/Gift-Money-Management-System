@@ -87,6 +87,10 @@ h1 { margin: 3px 0 0; font-size: 25px; letter-spacing: .04em; }
 .license-preview { max-height: 180px; overflow: auto; margin: 0; padding: 11px; color: #68787f; background: #f7f9f9; border: 1px solid #e4eaeb; white-space: pre-wrap; font: 11px/1.6 Consolas, monospace; }
 .release-notes-details { color: #566a72; }
 .release-notes-details summary { cursor: pointer; color: #246d70; font-size: 12px; font-weight: 700; }
+.release-notes-details > summary { list-style: none; }
+.release-notes-details > summary::-webkit-details-marker { display: none; }
+.release-notes-details > summary svg { transition: transform .18s ease; }
+.release-notes-details[open] > summary svg { transform: rotate(180deg); }
 .release-notes-details pre { max-height: 220px; overflow: auto; margin: 9px 0 0; padding: 10px 11px; color: #53666e; background: #f7faf9; border-left: 3px solid #7bb4aa; white-space: pre-wrap; font: 11px/1.65 "Segoe UI", sans-serif; }
 .trash-drop-target.drag-over { color: #9d3f3f; background: #fff0ef; outline: 1px dashed #cc7770; }
 tr[draggable="true"], .tag-management-item[draggable="true"] { cursor: grab; }
@@ -495,14 +499,16 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .tag-search-field input::placeholder { color: #93a0a5; font-weight: 400; }
 .file-info-wrap { position: relative; z-index: 31; }
 .offline-pill { min-height: 34px; padding: 0 7px; color: #4d6268; }
-.file-info-popover { position: absolute; top: calc(100% + 8px); right: 0; z-index: 50; width: min(320px, 42vw); display: grid; gap: 8px; padding: 12px; border: 1px solid #ccd8db; background: #fff; box-shadow: 0 12px 28px rgba(39, 57, 64, .14); }
+.file-info-popover { position: absolute; top: calc(100% + 8px); right: 0; z-index: 50; width: min(290px, 38vw); display: grid; gap: 7px; padding: 10px; border: 1px solid #ccd8db; background: #fff; box-shadow: 0 12px 28px rgba(39, 57, 64, .14); }
 .file-info-popover strong { font-size: 13px; }
 .file-path { overflow-wrap: anywhere; color: #6d7c83; font-family: "Segoe UI", sans-serif; font-size: 11px; line-height: 1.45; }
 .role-badge { justify-self: start; padding: 3px 7px; border-radius: 3px; font-size: 11px; font-weight: 700; }
 .role-badge.admin { color: #17635c; background: #e5f3f0; }
 .role-badge.viewer { color: #637178; background: #edf1f2; }
 .popover-actions { display: flex; flex-wrap: wrap; gap: 7px; padding-top: 3px; border-top: 1px solid #edf1f2; }
-.continuous-registration-button.active { color: #195c57; border-color: #77aaa4; background: #e7f4f1; }
+.continuous-registration-button { font-weight: 750; }
+.continuous-registration-button.active { color: #fff; border-color: #1c7b70; background: #1c7b70; box-shadow: 0 0 0 3px #d6efea, inset 0 -2px 0 rgba(0, 0, 0, .12); }
+.continuous-registration-button:not(.active) { color: #52636a; border-color: #aab8bd; background: #f5f7f8; }
 .search-results { position: absolute; top: calc(100% + 7px); right: 0; width: 360px; max-height: min(520px, calc(100vh - 84px)); overflow: auto; border: 1px solid #ccd8db; background: #fff; box-shadow: 0 14px 32px rgba(39, 57, 64, .15); color: #57666e; font-size: 12px; }
 .search-result { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px; color: #26353d; text-align: left; border: 0; border-bottom: 1px solid #edf1f2; background: #fff; }
 .search-result:hover { background: #f0f7f6; }
