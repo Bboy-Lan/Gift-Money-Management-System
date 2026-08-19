@@ -1099,12 +1099,18 @@ function EntriesView({ book, vaultPath, onError, onNotice, isAdmin, editLocked, 
     const maxReturn = filter.maxReturn === "" ? null : parseAmountFen(filter.maxReturn);
     const needle = (value: string) => value.trim().toLocaleLowerCase();
     const matches = (value: string | null | undefined, query: string) => !query || (value ?? "").toLocaleLowerCase().includes(needle(query));
+    const matchesTags = (entry: GiftEntry) => {
+      const queries = filter.tag.split(/[,，\s]+/).map(needle).filter(Boolean);
+      if (!queries.length) return true;
+      const names = entry.tags.map((id) => (tagById.get(id)?.name ?? "").toLocaleLowerCase());
+      return queries.some((query) => names.some((name) => name === query));
+    };
     return (entries.data ?? []).filter((entry) => {
       const entryDate = entry.receivedAt.slice(0, 10);
       const returnAmount = entry.returnGiftAmountFen ?? 0;
       const returned = returnAmount > 0;
       return matches(entry.personName, filter.person) && matches(entry.address, filter.address) && matches(entry.note, filter.note) &&
-        matches(entry.tags.map((id) => tagById.get(id)?.name ?? "").join(" "), filter.tag) &&
+        matchesTags(entry) &&
         (!filter.paymentMethod || resolvePaymentMethodValue(entry.paymentMethod) === filter.paymentMethod) &&
         (minAmount === null || entry.amountFen >= minAmount) && (maxAmount === null || entry.amountFen <= maxAmount) &&
         (!filter.startDate || entryDate >= filter.startDate) && (!filter.endDate || entryDate <= filter.endDate) &&
