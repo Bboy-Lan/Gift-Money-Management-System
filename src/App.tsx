@@ -14,6 +14,7 @@ import {
   Copy,
   ExternalLink,
   FileSpreadsheet,
+  Filter,
   FolderOpen,
   Gift,
   History,
@@ -110,6 +111,23 @@ type EntryDraft = {
   tagIds: string[];
 };
 
+type EntryFilter = {
+  person: string;
+  address: string;
+  note: string;
+  tag: string;
+  paymentMethod: string;
+  minAmount: string;
+  maxAmount: string;
+  startDate: string;
+  endDate: string;
+  returnStatus: "all" | "returned" | "not-returned";
+  minReturn: string;
+  maxReturn: string;
+};
+
+const EMPTY_ENTRY_FILTER: EntryFilter = { person: "", address: "", note: "", tag: "", paymentMethod: "", minAmount: "", maxAmount: "", startDate: "", endDate: "", returnStatus: "all", minReturn: "", maxReturn: "" };
+
 function useDebouncedValue<T>(value: T, delayMs: number) {
   const [debouncedValue, setDebouncedValue] = useState(value);
   useEffect(() => {
@@ -157,6 +175,15 @@ function App() {
   const [pendingSpreadsheetPaths, setPendingSpreadsheetPaths] = useState<string[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const localUpdate = useQuery({ queryKey: ["local-update"], queryFn: api.localUpdateStatus, enabled: false, retry: false });
+
+  useEffect(() => {
+    void localUpdate.refetch().then((result) => {
+      setLastUpdateCheckAt(new Date().toISOString());
+      if (result.data?.candidate) showNotice(`发现 v${result.data.candidate.version} 可用更新，可在“关于”页面查看`);
+    }).catch(() => {
+      // 启动时检查失败不阻断进入软件，用户仍可在“关于”页面手动重试。
+    });
+  }, []);
 
   useEffect(() => () => {
     if (noticeTimeoutRef.current !== null) window.clearTimeout(noticeTimeoutRef.current);
@@ -1055,15 +1082,38 @@ function EntriesView({ book, vaultPath, onError, onNotice, isAdmin, editLocked, 
   const [entryFormKey, setEntryFormKey] = useState(0);
   const [editingEntry, setEditingEntry] = useState<GiftEntry | null>(null);
   const [deletingEntry, setDeletingEntry] = useState<GiftEntry | null>(null);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filter, setFilter] = useState<EntryFilter>(EMPTY_ENTRY_FILTER);
   const queryEntries = useQuery({ queryKey: ["entries", vaultPath, book.id], queryFn: () => api.listEntries(book.id, "") });
-  const summary = useQuery({ queryKey: ["book-summary", vaultPath, book.id], queryFn: () => api.bookSummary(book.id) });
   const tags = useQuery({ queryKey: ["tags", vaultPath], queryFn: api.listTags });
   const createTag = useMutation({ mutationFn: ({ name, color }: { name: string; color: string }) => api.createTag(name, color), onSuccess: () => { client.invalidateQueries(); onVaultActivity(); }, onError: (err) => onError(String(err)) });
   const deleteEntry = useMutation({ mutationFn: api.deleteEntry, onSuccess: () => { client.invalidateQueries(); onVaultActivity(); }, onError: (err) => onError(String(err)) });
   const entries = queryEntries;
   const displayTags = canonicalizeTags(tags.data ?? []);
   const tagById = new Map(displayTags.map((tag) => [tag.id, tag]));
-  const summaryMoney = formatSummaryMoney(summary.data?.totalFen ?? 0);
+  const activeFilterCount = Object.entries(filter).filter(([key, value]) => key === "returnStatus" ? value !== "all" : Boolean(value)).length;
+  const filteredEntries = useMemo(() => {
+    const minAmount = filter.minAmount === "" ? null : parseAmountFen(filter.minAmount);
+    const maxAmount = filter.maxAmount === "" ? null : parseAmountFen(filter.maxAmount);
+    const minReturn = filter.minReturn === "" ? null : parseAmountFen(filter.minReturn);
+    const maxReturn = filter.maxReturn === "" ? null : parseAmountFen(filter.maxReturn);
+    const needle = (value: string) => value.trim().toLocaleLowerCase();
+    const matches = (value: string | null | undefined, query: string) => !query || (value ?? "").toLocaleLowerCase().includes(needle(query));
+    return (entries.data ?? []).filter((entry) => {
+      const entryDate = entry.receivedAt.slice(0, 10);
+      const returnAmount = entry.returnGiftAmountFen ?? 0;
+      const returned = returnAmount > 0;
+      return matches(entry.personName, filter.person) && matches(entry.address, filter.address) && matches(entry.note, filter.note) &&
+        matches(entry.tags.map((id) => tagById.get(id)?.name ?? "").join(" "), filter.tag) &&
+        (!filter.paymentMethod || resolvePaymentMethodValue(entry.paymentMethod) === filter.paymentMethod) &&
+        (minAmount === null || entry.amountFen >= minAmount) && (maxAmount === null || entry.amountFen <= maxAmount) &&
+        (!filter.startDate || entryDate >= filter.startDate) && (!filter.endDate || entryDate <= filter.endDate) &&
+        (filter.returnStatus === "all" || (filter.returnStatus === "returned" ? returned : !returned)) &&
+        (minReturn === null || returnAmount >= minReturn) && (maxReturn === null || returnAmount <= maxReturn);
+    });
+  }, [entries.data, filter, tagById]);
+  const filteredSummary = useMemo(() => ({ giftCount: filteredEntries.length, highestAmountFen: filteredEntries.reduce((max, entry) => Math.max(max, entry.amountFen), 0), totalFen: filteredEntries.reduce((total, entry) => total + entry.amountFen, 0) }), [filteredEntries]);
+  const summaryMoney = formatSummaryMoney(filteredSummary.totalFen);
   const canEdit = isAdmin && !editLocked;
   const createEntry = useMutation({ mutationFn: (input: EntryDraft) => api.createEntry({ bookId: book.id, ...input }), onSuccess: () => { client.invalidateQueries(); onVaultActivity(); if (continuousRegistration) { setEntryFormKey((key) => key + 1); setEntryModal(true); onNotice("登记成功，请继续登记下一条礼金"); } else { setEntryModal(false); } }, onError: (err) => onError(String(err)) });
   const updateEntry = useMutation({ mutationFn: (input: EntryDraft & { entryId: string }) => api.updateEntry(input), onSuccess: () => { client.invalidateQueries(); setEditingEntry(null); onVaultActivity(); }, onError: (err) => onError(String(err)) });
@@ -1075,17 +1125,23 @@ function EntriesView({ book, vaultPath, onError, onNotice, isAdmin, editLocked, 
     try { const path = await api.exportBookXlsx(book.id); onNotice(`已导出 Excel：${path}`); } catch (err) { onError(String(err)); }
   };
   return <section className={`entries-view ${editLocked ? "edit-locked" : ""}`}>
-    <div className="metric-grid summary-strip"><Metric label="礼金笔数" value={`${summary.data?.giftCount ?? 0}`} accent="blue" /><Metric label="最高金额" value={formatMoney(summary.data?.highestAmountFen ?? 0)} accent="green" /><Metric label="礼金总额" value={summaryMoney.primary} detail={summaryMoney.exact} accent="amber" /></div>
-    <div className="toolbar"><div className="toolbar-note">当前礼金簿共 {entries.data?.length ?? 0} 条记录</div><div className="toolbar-actions">{isAdmin && <button className={`secondary-button compact edit-lock-button ${editLocked ? "locked" : "unlocked"}`} data-operation-hint={editLocked ? "提示：解锁后可执行删除和重要资料修改。" : "提示：锁定后将暂停高风险修改与删除。"} type="button" onClick={editLocked ? onUnlockEditing : onLockEditing}><LockKeyhole size={14} />{editLocked ? "锁定编辑" : "已解锁编辑"}</button>}{canEdit && <button className="secondary-button compact" data-operation-hint="提示：仅修改礼金库名称和备注，不会改变内部数据归属。" onClick={onEditVault}><Pencil size={15} />编辑礼金库</button>}<button className="secondary-button compact" onClick={exportSpreadsheet}><FileSpreadsheet size={15} />导出 Excel</button><button className="secondary-button compact" onClick={onExportVault}><Archive size={15} />导出库</button>{canEdit && <button className="primary-button compact" onClick={() => setEntryModal(true)}><CirclePlus size={15} />登记礼金</button>}</div></div>
-    <section className="table-panel"><div className="table-panel-heading"><div><strong>礼金明细</strong><span>{entries.data?.length ?? 0} 条记录</span></div></div>{entries.isLoading ? <div className="table-empty">正在加载礼金记录…</div> : entries.data?.length ? <div className="table-wrap"><table><thead><tr><th>姓名</th><th>金额</th><th>支付方式</th><th>地址</th><th>备注</th><th className="tag-column">标签</th><th>回礼金额</th><th>登记日期</th>{isAdmin && <th />}</tr></thead><tbody>{entries.data.map((entry) => {
+    <div className="metric-grid summary-strip"><Metric label="礼金笔数" value={`${filteredSummary.giftCount}`} accent="blue" /><Metric label="最高金额" value={formatMoney(filteredSummary.highestAmountFen)} accent="green" /><Metric label="礼金总额" value={summaryMoney.primary} detail={summaryMoney.exact} accent="amber" /></div>
+    <div className="toolbar entries-toolbar"><div className="entries-filter-summary"><button className={`secondary-button compact filter-toggle ${activeFilterCount ? "active" : ""}`} type="button" aria-expanded={filterOpen} onClick={() => setFilterOpen((open) => !open)}><Filter size={14} />筛选{activeFilterCount ? `（${activeFilterCount}）` : ""}</button><span className="toolbar-note">当前显示 {filteredEntries.length} / {entries.data?.length ?? 0} 条记录</span></div><div className="toolbar-actions">{isAdmin && <button className={`secondary-button compact edit-lock-button ${editLocked ? "locked" : "unlocked"}`} data-operation-hint={editLocked ? "提示：解锁后可执行删除和重要资料修改。" : "提示：锁定后将暂停高风险修改与删除。"} type="button" onClick={editLocked ? onUnlockEditing : onLockEditing}><LockKeyhole size={14} />{editLocked ? "锁定编辑" : "已解锁编辑"}</button>}{canEdit && <button className="secondary-button compact" data-operation-hint="提示：仅修改礼金库名称和备注，不会改变内部数据归属。" onClick={onEditVault}><Pencil size={15} />编辑礼金库</button>}<button className="secondary-button compact" onClick={exportSpreadsheet}><FileSpreadsheet size={15} />导出 Excel</button><button className="secondary-button compact" onClick={onExportVault}><Archive size={15} />导出库</button>{canEdit && <button className="primary-button compact" onClick={() => setEntryModal(true)}><CirclePlus size={15} />登记礼金</button>}</div></div>
+    {filterOpen && <EntryFilterPanel filter={filter} onChange={setFilter} onReset={() => setFilter(EMPTY_ENTRY_FILTER)} />}
+    <section className="table-panel"><div className="table-panel-heading"><div><strong>礼金明细</strong><span>{filteredEntries.length} 条记录</span></div></div>{entries.isLoading ? <div className="table-empty">正在加载礼金记录…</div> : filteredEntries.length ? <div className="table-wrap"><table><thead><tr><th>姓名</th><th>金额</th><th>支付方式</th><th>地址</th><th>备注</th><th className="tag-column">标签</th><th>回礼金额</th><th>登记日期</th>{isAdmin && <th />}</tr></thead><tbody>{filteredEntries.map((entry) => {
       const entryTags = entry.tags.map((id) => tagById.get(id)).filter((tag): tag is Tag => Boolean(tag));
       const rowClassName = ["entry-row", entry.id === focusedEntryId ? "search-focused" : ""].filter(Boolean).join(" ");
       return <tr id={`entry-${entry.id}`} draggable={canEdit} onDragStart={(event) => { event.dataTransfer.setData("application/x-lijin-trash-kind", "entry"); event.dataTransfer.setData("application/x-lijin-trash-id", entry.id); }} className={rowClassName} style={{ "--entry-tag-color": entryTags[0]?.color ?? "#a9b5b9" } as React.CSSProperties} key={entry.id}><td className="entry-accent-cell"><div className="person-cell"><span className="avatar">{entry.personName.slice(0, 1)}</span><strong>{entry.personName}</strong></div></td><td className="amount-cell">{formatMoney(entry.amountFen)}</td><td><span className="method-pill">{entry.paymentMethod}</span></td><td className="muted">{entry.address || "-"}</td><td className="muted note-cell" title={entry.note || undefined}>{entry.note || "-"}</td><td className="tag-column">{entryTags.length ? <div className="tag-select">{entryTags.slice(0, 2).map((tag) => <span className="tag-chip" style={{ "--tag-color": tag.color } as React.CSSProperties} key={tag.id}>{tag.name}<span className="tag-swatch" /></span>)}</div> : <span className="muted">-</span>}</td><td className="amount-cell">{entry.returnGiftAmountFen ? formatMoney(entry.returnGiftAmountFen) : "-"}</td><td className="muted">{entry.receivedAt}</td>{canEdit && <td><div className="row-actions"><button className="icon-button subtle" data-operation-hint="提示：可修改此人的礼金、标签及回礼信息。" title="编辑信息" onClick={() => setEditingEntry(entry)}><Pencil size={15} /></button><button className="icon-button danger subtle" data-operation-hint="提示：删除后将进入回收站，可在回收站恢复。" title="删除记录" onClick={() => setDeletingEntry(entry)}><Trash2 size={15} /></button></div></td>}</tr>;
-    })}</tbody></table></div> : <div className="table-empty"><FileSpreadsheet size={27} /><strong>还没有礼金记录</strong><span>从第一笔登记开始建立这本礼金簿。</span>{isAdmin && <button className="primary-button compact" onClick={() => setEntryModal(true)}><CirclePlus size={15} />登记第一笔</button>}</div>}</section>
+    })}</tbody></table></div> : <div className="table-empty"><Filter size={27} /><strong>{entries.data?.length ? "没有符合条件的礼金记录" : "还没有礼金记录"}</strong><span>{entries.data?.length ? "请调整筛选条件后重试。" : "从第一笔登记开始建立这本礼金簿。"}</span>{!entries.data?.length && isAdmin && <button className="primary-button compact" onClick={() => setEntryModal(true)}><CirclePlus size={15} />登记第一笔</button>}</div>}</section>
      {entryModal && <EntryModal key={entryFormKey} tags={displayTags} vaultPath={vaultPath} onCreateTag={(name, color) => createTag.mutateAsync({ name, color })} onClose={() => { setEntryModal(false); onStopContinuousRegistration(); }} onSubmit={(input) => createEntry.mutate(input)} isSaving={createEntry.isPending} />}
     {editingEntry && <EntryModal tags={displayTags} vaultPath={vaultPath} onCreateTag={(name, color) => createTag.mutateAsync({ name, color })} initial={editingEntry} title="编辑信息" onClose={() => setEditingEntry(null)} onSubmit={(input) => updateEntry.mutate({ entryId: editingEntry.id, ...input })} isSaving={updateEntry.isPending} />}
     {deletingEntry && <ConfirmEntryDelete entry={deletingEntry} onClose={() => setDeletingEntry(null)} onConfirm={() => { deleteEntry.mutate(deletingEntry.id); setDeletingEntry(null); }} />}
   </section>;
+}
+
+function EntryFilterPanel({ filter, onChange, onReset }: { filter: EntryFilter; onChange: React.Dispatch<React.SetStateAction<EntryFilter>>; onReset: () => void }) {
+  const set = <K extends keyof EntryFilter>(key: K, value: EntryFilter[K]) => onChange((current) => ({ ...current, [key]: value }));
+  return <section className="entry-filter-panel" aria-label="礼金明细筛选"><div className="entry-filter-group"><strong>人物条件</strong><label>姓名<input value={filter.person} onChange={(event) => set("person", event.target.value)} placeholder="输入姓名" /></label><label>地址<input value={filter.address} onChange={(event) => set("address", event.target.value)} placeholder="输入地址" /></label><label>备注<input value={filter.note} onChange={(event) => set("note", event.target.value)} placeholder="输入备注" /></label><label>标签<input value={filter.tag} onChange={(event) => set("tag", event.target.value)} placeholder="输入标签" /></label></div><div className="entry-filter-group"><strong>礼金条件</strong><label>支付方式<select value={filter.paymentMethod} onChange={(event) => set("paymentMethod", event.target.value)}><option value="">全部</option>{PAYMENT_METHOD_OPTIONS.map((method) => <option key={method} value={method}>{method}</option>)}</select></label><div className="entry-filter-range"><label>最低金额<input inputMode="decimal" value={filter.minAmount} onChange={(event) => set("minAmount", event.target.value)} placeholder="不限" /></label><label>最高金额<input inputMode="decimal" value={filter.maxAmount} onChange={(event) => set("maxAmount", event.target.value)} placeholder="不限" /></label></div><div className="entry-filter-range"><label>开始日期<input type="date" value={filter.startDate} onChange={(event) => set("startDate", event.target.value)} /></label><label>结束日期<input type="date" value={filter.endDate} onChange={(event) => set("endDate", event.target.value)} /></label></div></div><div className="entry-filter-group"><strong>回礼条件</strong><label>回礼状态<select value={filter.returnStatus} onChange={(event) => set("returnStatus", event.target.value as EntryFilter["returnStatus"])}><option value="all">全部</option><option value="returned">已回礼</option><option value="not-returned">未回礼</option></select></label><div className="entry-filter-range"><label>最低回礼金额<input inputMode="decimal" value={filter.minReturn} onChange={(event) => set("minReturn", event.target.value)} placeholder="不限" /></label><label>最高回礼金额<input inputMode="decimal" value={filter.maxReturn} onChange={(event) => set("maxReturn", event.target.value)} placeholder="不限" /></label></div><button className="secondary-button compact" type="button" onClick={onReset}>重置筛选</button></div></section>;
 }
 
 type BatchPreviewState = {
