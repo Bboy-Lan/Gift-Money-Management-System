@@ -111,9 +111,10 @@ test("batch spreadsheet import requires an explicit existing-book or new-book ta
 
   assert.match(source, /targetBookId/);
   assert.match(source, /明确新建礼金簿/);
-  assert.match(source, /books=\{books\.data \?\? \[\]\}/);
+  assert.match(source, /books=\{openedVaultBooks\.data \?\? \[\]\}/);
   assert.match(apiSource, /targetBookId\?: string \| null/);
   assert.match(modelSource, /pub target_book_id: Option<String>/);
+  assert.match(modelSource, /pub target_vault_path: Option<String>/);
   assert.match(modelSource, /pub create_new_book: bool/);
   assert.match(rustSource, /validate_spreadsheet_target/);
   assert.match(rustSource, /目标礼金簿不存在或已被删除/);

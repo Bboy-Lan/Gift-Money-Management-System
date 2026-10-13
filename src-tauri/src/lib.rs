@@ -391,15 +391,24 @@ fn ensure_desktop_shortcut(app: &tauri::AppHandle) -> Result<(), String> {
     };
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let installed_executable = installed_application_path();
-    if executable.canonicalize().ok() != installed_executable.canonicalize().ok() {
+    let portable_executable = desktop.join("礼金簿管理系统").join("礼金簿管理.exe");
+    let shortcut_target = if portable_executable.is_file() {
+        portable_executable
+    } else {
+        installed_executable.clone()
+    };
+    let current_key = executable.canonicalize().ok();
+    let installed_key = installed_executable.canonicalize().ok();
+    let portable_key = shortcut_target.canonicalize().ok();
+    if current_key != installed_key && current_key != portable_key {
         return Ok(());
     }
-    let working_directory = executable
+    let working_directory = shortcut_target
         .parent()
         .ok_or_else(|| "无法确定程序目录".to_string())?;
     let shortcut = desktop.join("礼金簿管理.lnk");
     let shortcut_literal = powershell_path_literal(&shortcut);
-    let executable_literal = powershell_path_literal(&executable);
+    let executable_literal = powershell_path_literal(&shortcut_target);
     let working_directory_literal = powershell_path_literal(working_directory);
     let script = format!(
         "$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut({shortcut_literal}); $shortcut.TargetPath = {executable_literal}; $shortcut.WorkingDirectory = {working_directory_literal}; $shortcut.IconLocation = {executable_literal} + ',0'; $shortcut.Description = 'Gift ledger'; $shortcut.Save()"
@@ -430,10 +439,25 @@ fn normalize_vault_path(path: &str) -> PathBuf {
     result
 }
 
+fn cleanup_sqlite_sidecars(path: &Path) {
+    let base = path.to_string_lossy();
+    let wal = PathBuf::from(format!("{base}-wal"));
+    let shm = PathBuf::from(format!("{base}-shm"));
+    let wal_is_empty = std::fs::metadata(&wal)
+        .map(|metadata| metadata.len() == 0)
+        .unwrap_or(false);
+    if wal_is_empty {
+        let _ = std::fs::remove_file(&wal);
+        let _ = std::fs::remove_file(&shm);
+    }
+}
+
 fn configure_connection(connection: &Connection) -> Result<(), String> {
     connection
         .execute_batch(
-            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;",
+            // 礼金库是单文件格式。DELETE 日志会在事务结束后清理 SQLite
+            // 的旁车文件，避免用户目录出现 .giftvault-wal/.giftvault-shm。
+            "PRAGMA foreign_keys = ON; PRAGMA journal_mode = DELETE; PRAGMA busy_timeout = 5000;",
         )
         .map_err(|e| e.to_string())
 }
@@ -1544,10 +1568,19 @@ fn auto_backup_for_path(path: &Path, reason: &str, high_risk: bool) -> Result<()
 }
 
 #[tauri::command]
-fn choose_vault_path(mode: String, app: tauri::AppHandle) -> Option<String> {
+fn choose_vault_path_named(
+    mode: String,
+    file_name: Option<String>,
+    app: tauri::AppHandle,
+) -> Option<String> {
     let mut dialog = file_dialog_for_app(&app).add_filter("礼金库", &["giftvault"]);
     if mode == "save" {
-        dialog = dialog.set_file_name("家庭礼金库.giftvault");
+        dialog = dialog.set_file_name(
+            file_name
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or("家庭礼金库.giftvault"),
+        );
         dialog
             .save_file()
             .map(|path| path.to_string_lossy().to_string())
@@ -1556,6 +1589,11 @@ fn choose_vault_path(mode: String, app: tauri::AppHandle) -> Option<String> {
             .pick_file()
             .map(|path| path.to_string_lossy().to_string())
     }
+}
+
+#[tauri::command]
+fn choose_vault_path(mode: String, app: tauri::AppHandle) -> Option<String> {
+    choose_vault_path_named(mode, None, app)
 }
 
 fn is_comparison_spreadsheet(path: &Path) -> bool {
@@ -2081,6 +2119,10 @@ fn open_vault(path: String, state: State<'_, AppState>) -> Result<VaultOpenResul
         migrate_vault_if_needed(&path)?;
         connection = Connection::open(&path).map_err(|e| e.to_string())?;
         configure_connection(&connection)?;
+    } else if role == SessionRole::Admin {
+        // Existing databases may have been created with WAL by older versions.
+        // Normalize the mode on every admin open so stale sidecar files are released.
+        configure_connection(&connection)?;
     } else if role == SessionRole::Viewer && version < 3 {
         return Err("该礼金库需要由管理员模式打开一次完成升级后才能只读查看".to_string());
     }
@@ -2089,7 +2131,10 @@ fn open_vault(path: String, state: State<'_, AppState>) -> Result<VaultOpenResul
         .lock()
         .map_err(|_| "礼金库状态不可用".to_string())? = Some(path.clone());
     remember_opened_vault_path(&state, &path)?;
-    vault_open_result(&path, &connection, role)
+    let result = vault_open_result(&path, &connection, role);
+    drop(connection);
+    cleanup_sqlite_sidecars(&path);
+    result
 }
 
 #[tauri::command]
@@ -2221,6 +2266,40 @@ fn change_app_admin_pin(
 fn list_books(state: State<'_, AppState>) -> Result<Vec<GiftBook>, String> {
     let connection = active_connection(&state)?;
     let mut statement = connection.prepare("SELECT id, title, occasion, event_date, location, notes, created_at, source_file_name, source_file_path, source_imported_at FROM gift_books WHERE deleted_at IS NULL ORDER BY COALESCE(event_date, created_at) DESC").map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok(GiftBook {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                occasion: row.get(2)?,
+                event_date: row.get(3)?,
+                location: row.get(4)?,
+                notes: row.get(5)?,
+                created_at: row.get(6)?,
+                source_file_name: row.get(7)?,
+                source_file_path: row
+                    .get::<_, Option<String>>(8)?
+                    .map(|path| displayable_path(Path::new(&path))),
+                source_imported_at: row.get(9)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn list_books_for_vault(
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<GiftBook>, String> {
+    let path = canonical_opened_vault_path(&state, Some(&vault_path))?;
+    let connection = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| e.to_string())?;
+    configure_read_connection(&connection)?;
+    let mut statement = connection
+        .prepare("SELECT id, title, occasion, event_date, location, notes, created_at, source_file_name, source_file_path, source_imported_at FROM gift_books WHERE deleted_at IS NULL ORDER BY COALESCE(event_date, created_at) DESC")
+        .map_err(|e| e.to_string())?;
     let rows = statement
         .query_map([], |row| {
             Ok(GiftBook {
@@ -2394,30 +2473,6 @@ fn edit_book(
         source_file_path: existing.source_file_path,
         source_imported_at: existing.source_imported_at,
     })
-}
-
-#[tauri::command]
-fn delete_book(book_id: String, pin: String, state: State<'_, AppState>) -> Result<(), String> {
-    unlock_admin(pin, state.clone())?;
-    set_edit_locked(&state, false)?;
-    let mut connection = admin_connection(&state, "delete-book", true)?;
-    let transaction = connection.transaction().map_err(|e| e.to_string())?;
-    let title = audit_book_title(&transaction, &book_id)?;
-    let timestamp = now();
-    transaction.execute("UPDATE gift_books SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL", params![timestamp, timestamp, book_id]).map_err(|e| e.to_string())?;
-    write_audit_detail(
-        &transaction,
-        "delete",
-        "gift_book",
-        &book_id,
-        AuditPayload {
-            target: title.clone(),
-            book_title: Some(title),
-            description: "移入回收站".to_string(),
-            changes: Vec::new(),
-        },
-    )?;
-    transaction.commit().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2997,6 +3052,7 @@ struct SheetAnalysis {
     return_gifted_at_index: Option<usize>,
     tag_index: Option<usize>,
     errors: Vec<String>,
+    invalid_rows: Vec<usize>,
     valid_rows: usize,
 }
 
@@ -3016,7 +3072,18 @@ fn analyze_sheet(sheet: &ParsedSheet) -> SheetAnalysis {
     );
     let amount_index = column_index(
         &sheet.headers,
-        &["金额", "礼金", "数额", "amount", "money", "gift"],
+        &[
+            "金额",
+            "礼金",
+            "随礼",
+            "礼金金额",
+            "数额",
+            "amount",
+            "money",
+            "gift",
+            "gift amount",
+            "cash gift",
+        ],
     );
     let address_index = column_index(&sheet.headers, &["地址", "住址", "联系地址", "address"]);
     let payment_index = column_index(
@@ -3061,12 +3128,22 @@ fn analyze_sheet(sheet: &ParsedSheet) -> SheetAnalysis {
     let note_index = column_index(
         &sheet.headers,
         &[
-            "备注", "说明", "附言", "其他", "礼品", "note", "remark", "memo", "comment",
+            "备注",
+            "备注信息",
+            "说明",
+            "附言",
+            "其他",
+            "礼品",
+            "note",
+            "remark",
+            "memo",
+            "comment",
         ],
     );
-    let return_gift_index = column_index(
+    let return_gift_index = column_index_excluding(
         &sheet.headers,
         &["回礼", "回赠", "回敬", "还礼", "return gift", "return_gift"],
+        return_gift_amount_index,
     );
     let tag_index = column_index(
         &sheet.headers,
@@ -3083,6 +3160,7 @@ fn analyze_sheet(sheet: &ParsedSheet) -> SheetAnalysis {
         ],
     );
     let mut errors = Vec::new();
+    let mut invalid_rows = Vec::new();
     let mut valid_rows = 0;
     if name_index.is_none() {
         errors.push("缺少姓名列".to_string());
@@ -3105,10 +3183,12 @@ fn analyze_sheet(sheet: &ParsedSheet) -> SheetAnalysis {
                 continue;
             }
             if name.is_empty() {
+                invalid_rows.push(index);
                 errors.push(format!("第 {} 行缺少姓名", index + sheet.header_row + 1));
                 continue;
             }
             if parse_amount_fen(amount).unwrap_or(0) <= 0 {
+                invalid_rows.push(index);
                 errors.push(format!(
                     "第 {} 行金额无效: {}",
                     index + sheet.header_row + 1,
@@ -3131,6 +3211,7 @@ fn analyze_sheet(sheet: &ParsedSheet) -> SheetAnalysis {
         return_gifted_at_index,
         tag_index,
         errors,
+        invalid_rows,
         valid_rows,
     }
 }
@@ -3166,6 +3247,7 @@ fn analyze_sheet_with_mapping(
         return_gifted_at_index: mapping.return_gifted_at,
         tag_index: mapping.tags,
         errors: Vec::new(),
+        invalid_rows: Vec::new(),
         valid_rows: 0,
     };
     if analysis.name_index.is_none() {
@@ -3207,12 +3289,14 @@ fn analyze_sheet_with_mapping(
                 continue;
             }
             if name.is_empty() {
+                analysis.invalid_rows.push(index);
                 analysis
                     .errors
                     .push(format!("第 {} 行缺少姓名", index + sheet.header_row + 1));
                 continue;
             }
             if parse_amount_fen(amount).unwrap_or(0) <= 0 {
+                analysis.invalid_rows.push(index);
                 analysis.errors.push(format!(
                     "第 {} 行金额无效: {}",
                     index + sheet.header_row + 1,
@@ -3499,7 +3583,10 @@ fn import_sheet_into_transaction(
         .collect::<Vec<_>>();
     let timestamp = now();
     let mut imported = 0;
-    for row in &sheet.rows {
+    for (row_index, row) in sheet.rows.iter().enumerate() {
+        if analysis.invalid_rows.contains(&row_index) {
+            continue;
+        }
         let person_name = row
             .get(name_index)
             .map(String::as_str)
@@ -3552,7 +3639,7 @@ fn import_sheet_into_transaction(
             .and_then(|index| row.get(index))
             .map(String::as_str)
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or("导入")
+            .unwrap_or("其他")
             .trim()
             .to_string();
         let tag_names = analysis
@@ -3624,10 +3711,17 @@ fn import_sheet_into_transaction(
             .map_err(|e| e.to_string())?;
         imported += 1;
     }
+    let skipped_rows = analysis
+        .errors
+        .iter()
+        .filter(|error| error.starts_with("第 "))
+        .cloned()
+        .collect::<Vec<_>>();
     Ok(SpreadsheetImportResult {
         imported,
         created_tags,
         existing_tags,
+        skipped_rows,
     })
 }
 
@@ -3695,7 +3789,22 @@ fn import_spreadsheets(
         });
     }
 
-    let mut connection = admin_connection(&state, "import-spreadsheets", true)?;
+    let target_vault_path = prepared
+        .first()
+        .and_then(|item| item.item.target_vault_path.clone())
+        .ok_or_else(|| "请选择导入目标礼金库".to_string())?;
+    if prepared
+        .iter()
+        .any(|item| item.item.target_vault_path.as_deref() != Some(target_vault_path.as_str()))
+    {
+        return Err("同一批次导入必须使用同一个目标礼金库".to_string());
+    }
+    let mut connection = admin_connection_for_path(
+        &state,
+        Some(&target_vault_path),
+        "import-spreadsheets",
+        true,
+    )?;
     for prepared_item in &prepared {
         ensure_import_tags_are_available(
             &connection,
@@ -3708,6 +3817,7 @@ fn import_spreadsheets(
     let mut reserved_titles = HashSet::new();
     let mut books = Vec::with_capacity(prepared.len());
     let mut imported_total = 0;
+    let mut skipped_rows = Vec::new();
     for prepared_item in prepared {
         let timestamp = now();
         let source_file_name = prepared_item.sheet.file_name.clone();
@@ -3780,6 +3890,12 @@ fn import_spreadsheets(
             &mut catalog,
         )?;
         imported_total += result.imported;
+        skipped_rows.extend(
+            result
+                .skipped_rows
+                .iter()
+                .map(|row| format!("{}：{}", source_file_name, row)),
+        );
         write_audit_detail(
             &transaction,
             "import",
@@ -3800,18 +3916,26 @@ fn import_spreadsheets(
             imported: result.imported,
             created_tags: result.created_tags,
             existing_tags: result.existing_tags,
+            skipped_rows: result.skipped_rows,
         });
     }
     transaction.commit().map_err(|e| e.to_string())?;
     Ok(SpreadsheetBatchImportResult {
         books,
         imported: imported_total,
+        skipped_rows,
     })
 }
 
 fn validate_spreadsheet_import(analysis: &SheetAnalysis) -> Result<(), String> {
-    if !analysis.errors.is_empty() {
-        return Err(format!("导入未执行：{}", analysis.errors.join("；")));
+    let structural_errors = analysis
+        .errors
+        .iter()
+        .filter(|error| !error.starts_with("第 "))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !structural_errors.is_empty() {
+        return Err(format!("导入未执行：{}", structural_errors.join("；")));
     }
     analysis.name_index.ok_or("缺少姓名列")?;
     analysis.amount_index.ok_or("缺少金额列")?;
@@ -3848,7 +3972,10 @@ fn import_sheet_into_book(
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let timestamp = now();
     let mut imported = 0;
-    for row in &sheet.rows {
+    for (row_index, row) in sheet.rows.iter().enumerate() {
+        if analysis.invalid_rows.contains(&row_index) {
+            continue;
+        }
         let person_name = row
             .get(name_index)
             .map(String::as_str)
@@ -3893,7 +4020,7 @@ fn import_sheet_into_book(
             .and_then(|index| row.get(index))
             .map(String::as_str)
             .filter(|value| !value.trim().is_empty())
-            .unwrap_or("导入")
+            .unwrap_or("其他")
             .trim()
             .to_string();
         let tag_names = analysis
@@ -3975,6 +4102,12 @@ fn import_sheet_into_book(
         imported,
         created_tags,
         existing_tags,
+        skipped_rows: analysis
+            .errors
+            .iter()
+            .filter(|error| error.starts_with("第 "))
+            .cloned()
+            .collect(),
     })
 }
 
@@ -4036,7 +4169,11 @@ fn write_excel_datetime_or_text(
 }
 
 #[tauri::command]
-fn export_book_xlsx(book_id: String, state: State<'_, AppState>) -> Result<String, String> {
+fn export_book_xlsx(
+    book_id: String,
+    columns: Option<Vec<String>>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
     let connection = active_connection(&state)?;
     let book_title: String = connection
         .query_row(
@@ -4065,7 +4202,7 @@ fn export_book_xlsx(book_id: String, state: State<'_, AppState>) -> Result<Strin
     detail
         .set_name(safe_worksheet_name(&book_title))
         .map_err(|e| e.to_string())?;
-    let headers = [
+    let default_columns = vec![
         "姓名",
         "金额",
         "支付方式",
@@ -4077,59 +4214,92 @@ fn export_book_xlsx(book_id: String, state: State<'_, AppState>) -> Result<Strin
         "回礼时间",
         "登记日期",
     ];
+    let headers = columns.unwrap_or_else(|| {
+        default_columns
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>()
+    });
+    if headers.len() != default_columns.len()
+        || default_columns
+            .iter()
+            .any(|value| !headers.iter().any(|header| header == value))
+    {
+        return Err("表格列顺序无效，必须包含全部标准字段且不能重复".to_string());
+    }
     for (column, value) in headers.iter().enumerate() {
         detail
-            .write_string_with_format(0, column as u16, *value, &header)
+            .write_string_with_format(0, column as u16, value, &header)
             .map_err(|e| e.to_string())?;
     }
     let mut total_fen = 0i64;
     let mut count = 0u32;
     for (index, entry) in entries.iter().enumerate() {
         let excel_row = index as u32 + 1;
-        detail
-            .write_string(excel_row, 0, &entry.person_name)
-            .map_err(|e| e.to_string())?;
-        detail
-            .write_number_with_format(excel_row, 1, entry.amount_fen as f64 / 100.0, &currency)
-            .map_err(|e| e.to_string())?;
-        detail
-            .write_string(excel_row, 2, &entry.payment_method)
-            .map_err(|e| e.to_string())?;
-        detail
-            .write_string(excel_row, 3, entry.address.as_deref().unwrap_or_default())
-            .map_err(|e| e.to_string())?;
-        detail
-            .write_string(excel_row, 4, entry.note.as_deref().unwrap_or_default())
-            .map_err(|e| e.to_string())?;
-        detail
-            .write_string(excel_row, 5, entry.tag_names.join("、"))
-            .map_err(|e| e.to_string())?;
-        if let Some(return_gift_amount_fen) = entry.return_gift_amount_fen {
-            detail.write_number_with_format(
-                excel_row,
-                6,
-                return_gift_amount_fen as f64 / 100.0,
-                &currency,
-            )
-        } else {
-            detail.write_string(excel_row, 6, "")
-        }
-        .map_err(|e| e.to_string())?;
-        detail
-            .write_string(
-                excel_row,
-                7,
-                entry.return_gift.as_deref().unwrap_or_default(),
-            )
-            .map_err(|e| e.to_string())?;
-        if let Some(return_gifted_at) = entry.return_gifted_at.as_deref() {
-            write_excel_datetime_or_text(detail, excel_row, 8, return_gifted_at, &datetime)?;
-        } else {
-            detail
-                .write_string(excel_row, 8, "")
+        for (column, field) in headers.iter().enumerate() {
+            if field == "回礼时间" {
+                write_excel_datetime_or_text(
+                    detail,
+                    excel_row,
+                    column as u16,
+                    entry.return_gifted_at.as_deref().unwrap_or_default(),
+                    &datetime,
+                )?;
+            } else if field == "登记日期" {
+                write_excel_datetime_or_text(
+                    detail,
+                    excel_row,
+                    column as u16,
+                    &entry.received_at,
+                    &datetime,
+                )?;
+            } else {
+                match field.as_str() {
+                    "姓名" => detail.write_string(excel_row, column as u16, &entry.person_name),
+                    "金额" => detail.write_number_with_format(
+                        excel_row,
+                        column as u16,
+                        entry.amount_fen as f64 / 100.0,
+                        &currency,
+                    ),
+                    "支付方式" => {
+                        detail.write_string(excel_row, column as u16, &entry.payment_method)
+                    }
+                    "地址" => detail.write_string(
+                        excel_row,
+                        column as u16,
+                        entry.address.as_deref().unwrap_or_default(),
+                    ),
+                    "备注" => detail.write_string(
+                        excel_row,
+                        column as u16,
+                        entry.note.as_deref().unwrap_or_default(),
+                    ),
+                    "标签" => {
+                        detail.write_string(excel_row, column as u16, entry.tag_names.join("、"))
+                    }
+                    "回礼金额" => {
+                        if let Some(amount) = entry.return_gift_amount_fen {
+                            detail.write_number_with_format(
+                                excel_row,
+                                column as u16,
+                                amount as f64 / 100.0,
+                                &currency,
+                            )
+                        } else {
+                            detail.write_string(excel_row, column as u16, "")
+                        }
+                    }
+                    "回礼备注" => detail.write_string(
+                        excel_row,
+                        column as u16,
+                        entry.return_gift.as_deref().unwrap_or_default(),
+                    ),
+                    _ => unreachable!(),
+                }
                 .map_err(|e| e.to_string())?;
+            }
         }
-        write_excel_datetime_or_text(detail, excel_row, 9, &entry.received_at, &datetime)?;
         total_fen += entry.amount_fen;
         count += 1;
     }
@@ -6232,34 +6402,64 @@ fn comparison_people_from_connection(
         comparison_person_source_map(connection, vault_path, vault_name, book_id)?;
     let mut statement = connection
         .prepare(
-            "SELECT DISTINCT p.id, p.display_name, p.address, p.notes
+            "SELECT DISTINCT p.id, p.display_name, p.address,
+                    CASE
+                      WHEN NULLIF(TRIM(COALESCE(p.notes, '')), '') IS NOT NULL
+                        AND EXISTS (
+                          SELECT 1 FROM gift_entries en
+                          WHERE en.person_id = p.id AND en.deleted_at IS NULL
+                            AND (? IS NULL OR en.book_id = ?)
+                            AND NULLIF(TRIM(COALESCE(en.note, '')), '') IS NOT NULL
+                        )
+                      THEN p.notes || '、' || (
+                        SELECT GROUP_CONCAT(DISTINCT TRIM(en.note))
+                        FROM gift_entries en
+                        WHERE en.person_id = p.id AND en.deleted_at IS NULL
+                          AND (? IS NULL OR en.book_id = ?)
+                          AND NULLIF(TRIM(COALESCE(en.note, '')), '') IS NOT NULL
+                      )
+                      ELSE COALESCE(NULLIF(TRIM(p.notes), ''), (
+                        SELECT GROUP_CONCAT(DISTINCT TRIM(en.note))
+                        FROM gift_entries en
+                        WHERE en.person_id = p.id AND en.deleted_at IS NULL
+                          AND (? IS NULL OR en.book_id = ?)
+                          AND NULLIF(TRIM(COALESCE(en.note, '')), '') IS NOT NULL
+                      ))
+                    END
              FROM people p
              JOIN gift_entries e ON e.person_id = p.id AND e.deleted_at IS NULL
              JOIN gift_books b ON b.id = e.book_id AND b.deleted_at IS NULL
              WHERE p.deleted_at IS NULL
                AND (? IS NULL OR e.book_id = ?)
-               AND (p.display_name LIKE ? OR COALESCE(p.address, '') LIKE ?)
+               AND (p.display_name LIKE ? OR COALESCE(p.address, '') LIKE ? OR COALESCE(p.notes, '') LIKE ? OR COALESCE(e.note, '') LIKE ?)
              ORDER BY p.display_name, COALESCE(p.address, ''), p.id
              ",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
-        .query_map(params![book_id, book_id, pattern, pattern], |row| {
-            let person_id: String = row.get(0)?;
-            Ok(ComparisonPerson {
-                vault_path: vault_path.to_string(),
-                vault_name: vault_name.to_string(),
-                person_id: person_id.clone(),
-                display_name: row.get(1)?,
-                address: row.get(2)?,
-                notes: row.get(3)?,
-                tags: tags_by_person.get(&person_id).cloned().unwrap_or_default(),
-                source_books: source_books_by_person
-                    .get(&person_id)
-                    .cloned()
-                    .unwrap_or_default(),
-            })
-        })
+        .query_map(
+            params![
+                book_id, book_id, book_id, book_id, book_id, book_id, book_id, book_id, pattern,
+                pattern, pattern, pattern
+            ],
+            |row| {
+                let person_id: String = row.get(0)?;
+                Ok(ComparisonPerson {
+                    vault_path: vault_path.to_string(),
+                    vault_name: vault_name.to_string(),
+                    book_id: book_id.unwrap_or_default().to_string(),
+                    person_id: person_id.clone(),
+                    display_name: row.get(1)?,
+                    address: row.get(2)?,
+                    notes: row.get(3)?,
+                    tags: tags_by_person.get(&person_id).cloned().unwrap_or_default(),
+                    source_books: source_books_by_person
+                        .get(&person_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                })
+            },
+        )
         .map_err(|error| error.to_string())?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())
@@ -6565,7 +6765,10 @@ fn search_comparison_book_people(
             Some(&book_id),
             &query,
         )? {
-            let key = format!("{}\u{1f}{}", person.vault_path, person.person_id);
+            let key = format!(
+                "{}\u{1f}{}\u{1f}{}",
+                person.vault_path, person.book_id, person.person_id
+            );
             if let Some(existing) = unique_people.get_mut(&key) {
                 merge_comparison_person_sources(existing, person);
             } else {
@@ -6599,7 +6802,10 @@ fn search_comparison_duplicate_book_people(
             Some(&book_id),
             "*",
         )? {
-            let key = format!("{}\u{1f}{}", person.vault_path, person.person_id);
+            let key = format!(
+                "{}\u{1f}{}\u{1f}{}",
+                person.vault_path, person.book_id, person.person_id
+            );
             if let Some(existing) = unique_people.get_mut(&key) {
                 merge_comparison_person_sources(existing, person);
             } else {
@@ -6637,10 +6843,10 @@ fn duplicate_comparison_people(people: Vec<ComparisonPerson>) -> Vec<ComparisonP
     for person in &people {
         let name = normalized_comparison_person_name(&person.display_name);
         if !name.is_empty() {
-            identities_by_name
-                .entry(name)
-                .or_default()
-                .insert(format!("{}\u{1f}{}", person.vault_path, person.person_id));
+            identities_by_name.entry(name).or_default().insert(format!(
+                "{}\u{1f}{}\u{1f}{}",
+                person.vault_path, person.book_id, person.person_id
+            ));
         }
     }
     people
@@ -6704,7 +6910,12 @@ fn comparison_person_history(
             // Ignore that stale person reference instead of widening the scope or failing all results.
             continue;
         };
-        let key = format!("{}\u{1f}{}", path.to_string_lossy(), person.person_id);
+        let key = format!(
+            "{}\u{1f}{}\u{1f}{}",
+            path.to_string_lossy(),
+            person.book_id,
+            person.person_id
+        );
         if !seen.insert(key) {
             continue;
         }
@@ -6714,7 +6925,10 @@ fn comparison_person_history(
         let Ok(vault_name) = comparison_vault_name(&connection, &path) else {
             continue;
         };
-        for book_id in book_ids {
+        if !book_ids.contains(&person.book_id) {
+            continue;
+        }
+        for book_id in std::iter::once(&person.book_id) {
             if let Ok(entries) = comparison_person_history_from_connection(
                 &connection,
                 &path.to_string_lossy(),
@@ -6755,6 +6969,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             choose_vault_path,
+            choose_vault_path_named,
             choose_comparison_vault_paths,
             local_update_status,
             open_local_update_directory,
@@ -6777,9 +6992,9 @@ pub fn run() {
             reset_app_pin_with_recovery,
             change_app_admin_pin,
             list_books,
+            list_books_for_vault,
             create_book,
             edit_book,
-            delete_book,
             restore_book,
             list_entries,
             list_return_gifts,
@@ -6987,6 +7202,56 @@ mod tests {
     }
 
     #[test]
+    fn comparison_search_matches_and_merges_person_and_entry_notes() {
+        let connection = Connection::open_in_memory().expect("memory db");
+        migrate(&connection).expect("migration");
+        connection
+            .execute(
+                "INSERT INTO gift_books(id, title, created_at, updated_at) VALUES ('book-1', 'Test book', 'now', 'now')",
+                [],
+            )
+            .expect("book");
+        connection
+            .execute(
+                "INSERT INTO people(id, display_name, notes, created_at, updated_at) VALUES ('person-a', '张伟', '人物备注', 'now', 'now'), ('person-b', '张伟', NULL, 'now', 'now')",
+                [],
+            )
+            .expect("people");
+        connection
+            .execute(
+                "INSERT INTO gift_entries(id, book_id, person_id, amount_fen, payment_method, note, received_at, created_at, updated_at) VALUES ('entry-a', 'book-1', 'person-a', 100, '现金', '登记备注', 'now', 'now', 'now'), ('entry-b', 'book-1', 'person-b', 200, '现金', '另一条备注', 'now', 'now', 'now')",
+                [],
+            )
+            .expect("entries");
+
+        let person_note_matches = comparison_people_from_connection(
+            &connection,
+            "C:\\test.giftvault",
+            "Test vault",
+            Some("book-1"),
+            "人物备注",
+        )
+        .expect("person note search");
+        let entry_note_matches = comparison_people_from_connection(
+            &connection,
+            "C:\\test.giftvault",
+            "Test vault",
+            Some("book-1"),
+            "另一条备注",
+        )
+        .expect("entry note search");
+
+        assert_eq!(person_note_matches.len(), 1);
+        assert_eq!(
+            person_note_matches[0].notes.as_deref(),
+            Some("人物备注、登记备注")
+        );
+        assert_eq!(entry_note_matches.len(), 1);
+        assert_eq!(entry_note_matches[0].person_id, "person-b");
+        assert_eq!(entry_note_matches[0].notes.as_deref(), Some("另一条备注"));
+    }
+
+    #[test]
     fn person_tag_audit_sources_list_all_related_gift_books() {
         let connection = Connection::open_in_memory().expect("memory db");
         migrate(&connection).expect("migration");
@@ -7060,33 +7325,41 @@ mod tests {
 
     #[test]
     fn duplicate_comparison_people_keeps_same_book_collisions_and_distinct_paths() {
-        let person = |vault_path: &str, person_id: &str, display_name: &str| ComparisonPerson {
-            vault_path: vault_path.to_string(),
-            vault_name: "Test vault".to_string(),
-            person_id: person_id.to_string(),
-            display_name: display_name.to_string(),
-            address: None,
-            notes: None,
-            tags: Vec::new(),
-            source_books: Vec::new(),
+        let person = |vault_path: &str, book_id: &str, person_id: &str, display_name: &str| {
+            ComparisonPerson {
+                vault_path: vault_path.to_string(),
+                vault_name: "Test vault".to_string(),
+                book_id: book_id.to_string(),
+                person_id: person_id.to_string(),
+                display_name: display_name.to_string(),
+                address: None,
+                notes: None,
+                tags: Vec::new(),
+                source_books: Vec::new(),
+            }
         };
         let people = vec![
-            person("D:\\same.giftvault", "person-a", "Liu Yang"),
-            person("D:\\same.giftvault", "person-b", "Liu Yang"),
-            person("D:\\other.giftvault", "person-a", "Liu Yang"),
-            person("D:\\same.giftvault", "person-c", "Wang Mei"),
+            person("D:\\same.giftvault", "book-1", "person-a", "Liu Yang"),
+            person("D:\\same.giftvault", "book-2", "person-b", "Liu Yang"),
+            person("D:\\other.giftvault", "book-1", "person-a", "Liu Yang"),
+            person("D:\\same.giftvault", "book-1", "person-c", "Wang Mei"),
         ];
 
         let duplicates = duplicate_comparison_people(people);
         let identities = duplicates
             .iter()
-            .map(|person| format!("{}\u{1f}{}", person.vault_path, person.person_id))
+            .map(|person| {
+                format!(
+                    "{}\u{1f}{}\u{1f}{}",
+                    person.vault_path, person.book_id, person.person_id
+                )
+            })
             .collect::<HashSet<_>>();
 
         assert_eq!(duplicates.len(), 3);
-        assert!(identities.contains("D:\\same.giftvault\u{1f}person-a"));
-        assert!(identities.contains("D:\\same.giftvault\u{1f}person-b"));
-        assert!(identities.contains("D:\\other.giftvault\u{1f}person-a"));
+        assert!(identities.contains("D:\\same.giftvault\u{1f}book-1\u{1f}person-a"));
+        assert!(identities.contains("D:\\same.giftvault\u{1f}book-2\u{1f}person-b"));
+        assert!(identities.contains("D:\\other.giftvault\u{1f}book-1\u{1f}person-a"));
         assert!(!identities
             .iter()
             .any(|identity| identity.ends_with("person-c")));

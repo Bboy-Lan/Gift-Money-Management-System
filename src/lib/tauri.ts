@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AuditLog, BookStat, BookSummary, ComparisonBook, ComparisonBookEntry, ComparisonBookRef, ComparisonPerson, ComparisonPersonHistory, ComparisonPersonRef, GiftBook, GiftEntry, LocalUpdateStatus, Person, PersonHistory, ReturnGiftRecord, SearchResponse, SessionStatus, SettingsStorageInfo, Tag, TrashItem, VaultInfo, VaultOpenResult } from "../types";
 
 export const api = {
-  chooseVaultPath: (mode: "open" | "save") => invoke<string | null>("choose_vault_path", { mode }),
+  chooseVaultPath: (mode: "open" | "save", fileName?: string) => fileName ? invoke<string | null>("choose_vault_path_named", { mode, fileName }) : invoke<string | null>("choose_vault_path", { mode }),
   chooseComparisonVaultPaths: () => invoke<string[]>("choose_comparison_vault_paths"),
   createVault: (path: string, name: string, notes: string) => invoke<VaultOpenResult>("create_vault", { path, name, notes }),
   editVault: (name: string, notes: string) => invoke<VaultInfo>("edit_vault", { name, notes }),
@@ -27,11 +27,11 @@ export const api = {
   chooseSettingsDirectory: () => invoke<SettingsStorageInfo | null>("choose_settings_directory"),
   licenseText: () => invoke<string>("license_text"),
   listBooks: () => invoke<GiftBook[]>("list_books"),
+  listBooksForVault: (vaultPath: string) => invoke<GiftBook[]>("list_books_for_vault", { vaultPath }),
   createBook: (input: { title: string; occasion: string; eventDate: string; location: string; notes: string }) =>
     invoke<GiftBook>("create_book", input),
   editBook: (bookId: string, input: { title: string; occasion: string; eventDate: string; location: string; notes: string }) =>
     invoke<GiftBook>("edit_book", { bookId, input }),
-  deleteBook: (bookId: string, pin: string) => invoke<void>("delete_book", { bookId, pin }),
   restoreBook: (bookId: string) => invoke<void>("restore_book", { bookId }),
   listEntries: (bookId: string, search: string) => invoke<GiftEntry[]>("list_entries", { bookId, search }),
   listReturnGifts: () => invoke<ReturnGiftRecord[]>("list_return_gifts"),
@@ -93,7 +93,7 @@ export const api = {
   previewSpreadsheetMapping: (path: string, sheetName: string | null, headerRow: number | null, mapping: SpreadsheetColumnMapping) => invoke<SpreadsheetPreview>("preview_spreadsheet_mapping", { path, sheetName, headerRow, mapping }),
   importSpreadsheet: (path: string, bookId: string) => invoke<SpreadsheetImportResult>("import_spreadsheet", { path, bookId }),
   importSpreadsheets: (items: SpreadsheetImportItem[]) => invoke<SpreadsheetBatchImportResult>("import_spreadsheets", { items }),
-  exportBookXlsx: (bookId: string) => invoke<string>("export_book_xlsx", { bookId }),
+  exportBookXlsx: (bookId: string, columns?: string[]) => invoke<string>("export_book_xlsx", { bookId, columns }),
   exportVault: () => invoke<string>("export_vault"),
 };
 
@@ -132,6 +132,7 @@ export interface SpreadsheetImportItem {
   mapping?: SpreadsheetColumnMapping;
   bookName: string;
   targetBookId?: string | null;
+  targetVaultPath?: string | null;
   createNewBook?: boolean;
 }
 
@@ -151,6 +152,7 @@ export interface SpreadsheetImportResult {
   imported: number;
   createdTags: SpreadsheetTagValuePreview[];
   existingTags: string[];
+  skippedRows: string[];
 }
 
 export interface SpreadsheetImportBookResult {
@@ -158,9 +160,11 @@ export interface SpreadsheetImportBookResult {
   imported: number;
   createdTags: SpreadsheetTagValuePreview[];
   existingTags: string[];
+  skippedRows: string[];
 }
 
 export interface SpreadsheetBatchImportResult {
   books: SpreadsheetImportBookResult[];
   imported: number;
+  skippedRows: string[];
 }

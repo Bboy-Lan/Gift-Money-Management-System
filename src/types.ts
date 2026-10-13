@@ -174,6 +174,7 @@ export interface ComparisonPersonSource {
 export interface ComparisonPerson {
   vaultPath: string;
   vaultName: string;
+  bookId: string;
   personId: string;
   displayName: string;
   address: string | null;
@@ -184,6 +185,7 @@ export interface ComparisonPerson {
 
 export interface ComparisonPersonRef {
   vaultPath: string;
+  bookId: string;
   personId: string;
 }
 

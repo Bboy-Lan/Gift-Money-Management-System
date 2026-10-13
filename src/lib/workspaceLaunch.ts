@@ -33,13 +33,14 @@ export async function openRecentVault<T>(
 }
 
 export async function openRecentVaults<T>(recentVaults: readonly RecentVault[], opener: (path: string) => Promise<T>) {
-  let firstFailure: Awaited<ReturnType<typeof openRecentVault<T>>> | undefined;
-  for (const recent of recentVaults) {
-    const opened = await openRecentVault(recent, opener);
-    if (opened.status !== "failed") return opened;
-    firstFailure ??= opened;
-  }
-  return firstFailure ?? { status: "none" as const };
+  // Only the newest record is an automatic launch target. Falling back to an
+  // older record can silently reopen a valid but unrelated vault after the
+  // newest vault was moved or renamed.
+  return openRecentVaultsLatest(recentVaults[0], opener);
+}
+
+export async function openRecentVaultsLatest<T>(recent: RecentVault | undefined, opener: (path: string) => Promise<T>) {
+  return recent ? openRecentVault(recent, opener) : { status: "none" as const };
 }
 
 export function resolveInitialBookId(preferredBookId: string | null | undefined, books: readonly OpenedBook[]) {

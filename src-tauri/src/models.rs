@@ -170,6 +170,7 @@ pub struct ComparisonPersonSource {
 pub struct ComparisonPerson {
     pub vault_path: String,
     pub vault_name: String,
+    pub book_id: String,
     pub person_id: String,
     pub display_name: String,
     pub address: Option<String>,
@@ -182,6 +183,7 @@ pub struct ComparisonPerson {
 #[serde(rename_all = "camelCase")]
 pub struct ComparisonPersonRef {
     pub vault_path: String,
+    pub book_id: String,
     pub person_id: String,
 }
 
@@ -330,6 +332,8 @@ pub struct SpreadsheetImportItem {
     pub book_name: String,
     pub target_book_id: Option<String>,
     #[serde(default)]
+    pub target_vault_path: Option<String>,
+    #[serde(default)]
     pub create_new_book: bool,
 }
 
@@ -340,6 +344,7 @@ pub struct SpreadsheetImportBookResult {
     pub imported: usize,
     pub created_tags: Vec<SpreadsheetTagValuePreview>,
     pub existing_tags: Vec<String>,
+    pub skipped_rows: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -347,6 +352,7 @@ pub struct SpreadsheetImportBookResult {
 pub struct SpreadsheetBatchImportResult {
     pub books: Vec<SpreadsheetImportBookResult>,
     pub imported: usize,
+    pub skipped_rows: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -371,6 +377,7 @@ pub struct SpreadsheetImportResult {
     pub imported: usize,
     pub created_tags: Vec<SpreadsheetTagValuePreview>,
     pub existing_tags: Vec<String>,
+    pub skipped_rows: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]

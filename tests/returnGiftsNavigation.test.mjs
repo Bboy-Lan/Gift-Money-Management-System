@@ -34,7 +34,7 @@ test("history removes the book trash action and exposes a dedicated history dele
   const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
   const apiSource = await readFile(new URL("../src/lib/tauri.ts", import.meta.url), "utf8");
 
-  assert.match(source, /activeTab !== "history"/);
+  assert.match(source, /activeTab !== "entries"/);
   assert.match(source, /删除改动信息/);
   assert.match(source, /恢复改动/);
   assert.match(source, /api\.clearAuditLogs/);
@@ -61,8 +61,8 @@ test("gift summary uses record count, highest amount, and total amount", async (
   const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
   const types = await readFile(new URL("../src/types.ts", import.meta.url), "utf8");
 
-  assert.match(source, /<Metric label="礼金笔数" value=\{`\$\{summary\.data\?\.giftCount \?\? 0\}`\} accent="blue" \/>/);
-  assert.match(source, /<Metric label="最高金额" value=\{formatMoney\(summary\.data\?\.highestAmountFen \?\? 0\)\} accent="green" \/>/);
+  assert.match(source, /<Metric label="礼金笔数" value=\{`\$\{filteredSummary\.giftCount\}`\} accent="blue" \/>/);
+  assert.match(source, /<Metric label="最高金额" value=\{formatMoney\(filteredSummary\.highestAmountFen\)\} accent="green" \/>/);
   assert.match(source, /<Metric label="礼金总额" value=\{summaryMoney\.primary\} detail=\{summaryMoney\.exact\} accent="amber" \/>/);
   assert.match(types, /highestAmountFen: number;/);
 });

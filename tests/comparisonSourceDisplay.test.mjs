@@ -11,16 +11,32 @@ test("comparison overview selects exact gift books and queries only that exact s
   assert.match(source, /comparisonBookKey/);
   assert.match(source, /className=\{`comparison-book-item \$\{selected \? "selected" : ""\}`\}/);
   assert.match(source, /api\.searchComparisonBookPeople\(selectedBookRefs, debouncedPersonQuery\)/);
+  assert.match(await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8"), /COALESCE\(e\.note, ''\) LIKE/);
   assert.match(source, /api\.searchComparisonDuplicateBookPeople\(selectedBookRefs\)/);
   assert.match(source, /disabled=\{selectedBookRefs\.length < 1\}/);
   assert.match(source, /enabled: duplicateSearchRequested && selectedBookRefs\.length > 0/);
-  assert.match(source, /找到 \$\{comparisonPeople\.length\} 位/);
+  assert.match(source, /找到 \{visibleDuplicateCount\} 位人物/);
+  assert.match(source, /className="comparison-search-row"/);
+  assert.match(source, /function ComparisonPeopleOverview/);
+  assert.match(source, /bookOrderIndex/);
+  assert.match(source, /const nameOrder = new Map/);
+  assert.match(source, /nameOrder\.get\(left\.displayName\)/);
+  assert.match(source, /collapsed, onToggle/);
+  assert.match(source, /comparison-section-toggle/);
+  assert.match(source, /function ComparisonPersonDetails/);
+  assert.doesNotMatch(source, /function ComparisonPeopleSourceSummary/);
+  assert.doesNotMatch(source, /<ComparisonSourceSummary/);
   assert.match(source, /api\.comparisonPersonHistory\([\s\S]*?selectedBookRefs\)/);
   assert.match(source, /client\.removeQueries\(\{ queryKey: \["comparison-book-people"\] \}\)/);
   assert.match(source, /readComparisonBookSelection/);
   assert.match(source, /rememberComparisonBookSelection/);
   assert.match(source, /const scopeChanged = selectionScope\.current !== scope/);
   assert.match(source, /搜索同名人物/);
+  assert.match(source, /selectedDuplicateNames\?\.length === 0/);
+  assert.match(source, /resultReady && !resultsLoading && comparisonPeople\.length > 0/);
+  assert.match(source, /setSelectedDuplicateNames\(null\)/);
+  assert.match(source, /const inlineDuplicateNames = duplicateNames\.slice\(0, 7\)/);
+  assert.match(styles, /\.comparison-name-filter-popover \{[^}]*right: 0[^}]*max-height: min\(188px, calc\(100vh - 150px\)\)/);
   assert.doesNotMatch(source, /跨簿人物档案/);
   assert.doesNotMatch(source, /api\.comparisonBookEntries/);
   assert.doesNotMatch(source, /comparison-book-detail/);
@@ -31,10 +47,11 @@ test("comparison overview selects exact gift books and queries only that exact s
   assert.match(source, /<th>姓名<\/th><th>金额<\/th><th>支付方式<\/th>/);
   assert.doesNotMatch(source, /function comparisonSourceDetails/);
   assert.doesNotMatch(source, /comparison-profile-facts/);
+  assert.match(source, /person\.bookId/);
   assert.doesNotMatch(source, /comparison-identity-details/);
   assert.doesNotMatch(styles, /comparison-identity-detail \{/);
-  assert.match(source, /historyError \? <span className="field-hint">人物明细读取失败/);
-  assert.match(source, /comparison-source-summary/);
+  assert.match(source, /if \(historyError\) return <span className="field-hint">人物明细读取失败/);
+  assert.doesNotMatch(source, /comparison-source-summary/);
   assert.doesNotMatch(source, /member\.vaultName/);
 });
 
@@ -55,11 +72,11 @@ test("gift detail rows render at most two tags without changing entry data", asy
   assert.match(source, /entryTags\.slice\(0, 2\)\.map/);
 });
 
-test("comparison book cards use a responsive grid and a wider search field", async () => {
+test("comparison book cards use a responsive grid and a compact search field", async () => {
   const styles = await readFile(new URL("../src/styles.css", import.meta.url), "utf8");
 
   assert.match(styles, /\.comparison-book-list \{ display: grid; grid-template-columns: repeat\(auto-fit, minmax\(180px, 1fr\)\)/);
-  assert.match(styles, /\.comparison-person-search \{[^}]*width: min\(560px, calc\(100% - 34px\)\)[^}]*margin: 14px 17px 12px/);
+  assert.match(styles, /\.comparison-person-search \{[^}]*width: 360px[^}]*margin: 14px 17px 12px/);
 });
 
 test("workspace breadcrumb prefers the currently opened gift book title", async () => {
