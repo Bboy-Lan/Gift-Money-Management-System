@@ -735,29 +735,10 @@ fn migrate_vault_if_needed(path: &Path) -> Result<(), String> {
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|e| e.to_string())?;
     if version < CURRENT_SCHEMA || table_exists(&connection, "vault_security")? {
-        let backup = app_backup_root().join("migration").join(format!(
-            "{}-before-v{CURRENT_SCHEMA}.giftvault",
-            Local::now().format("%Y%m%d-%H%M%S-%3f")
-        ));
-        snapshot_vault(path, &backup)?;
+        auto_backup_for_path(path, &format!("migration-before-v{CURRENT_SCHEMA}"), true)?;
         migrate(&connection)?;
     }
     Ok(())
-}
-
-fn active_connection(state: &State<'_, AppState>) -> Result<Connection, String> {
-    let path = active_vault_path(state)?;
-    if is_admin_session(state)? {
-        migrate_vault_if_needed(&path)?;
-        let connection = Connection::open(path).map_err(|e| e.to_string())?;
-        configure_connection(&connection)?;
-        Ok(connection)
-    } else {
-        let connection = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|e| e.to_string())?;
-        configure_read_connection(&connection)?;
-        Ok(connection)
-    }
 }
 
 fn set_admin_session(state: &State<'_, AppState>) -> Result<(), String> {
@@ -794,6 +775,7 @@ fn require_admin(state: &State<'_, AppState>) -> Result<(), String> {
 
 fn admin_connection(
     state: &State<'_, AppState>,
+    vault_path: &str,
     reason: &str,
     high_risk: bool,
 ) -> Result<Connection, String> {
@@ -805,22 +787,35 @@ fn admin_connection(
     {
         return Err("编辑已锁定，请先解锁编辑".to_string());
     }
-    auto_backup(state, reason, high_risk)?;
-    active_connection(state)
+    let path = canonical_opened_vault_path(state, Some(vault_path))?;
+    migrate_vault_if_needed(&path)?;
+    auto_backup_for_path(&path, reason, high_risk)?;
+    let connection = Connection::open(&path).map_err(|e| e.to_string())?;
+    configure_connection(&connection)?;
+    Ok(connection)
 }
 
 fn canonical_opened_vault_path(
-    state: &State<'_, AppState>,
+    state: &AppState,
     requested_path: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let active = active_vault_path(state)?;
-    let requested = requested_path
-        .map(PathBuf::from)
-        .unwrap_or_else(|| active.clone());
+    let requested = match requested_path {
+        Some(path) => PathBuf::from(path),
+        None => state
+            .vault_path
+            .lock()
+            .map_err(|_| "礼金库状态不可用".to_string())?
+            .clone()
+            .ok_or("请先打开礼金库")?,
+    };
     let requested = requested
         .canonicalize()
         .map_err(|_| "找不到回收站项目所属的礼金库".to_string())?;
-    let opened = opened_vault_paths(state)?;
+    let opened = state
+        .opened_vault_paths
+        .lock()
+        .map_err(|_| "礼金库打开状态不可用".to_string())?
+        .clone();
     if opened
         .iter()
         .map(|path| path.canonicalize().unwrap_or_else(|_| path.clone()))
@@ -842,9 +837,21 @@ fn admin_connection_for_path(
         return Err("编辑已锁定，请先解锁编辑".to_string());
     }
     let path = canonical_opened_vault_path(state, requested_path)?;
+    migrate_vault_if_needed(&path)?;
     auto_backup_for_path(&path, reason, high_risk)?;
     let connection = Connection::open(path).map_err(|e| e.to_string())?;
     configure_connection(&connection)?;
+    Ok(connection)
+}
+
+fn scoped_read_connection(
+    state: &State<'_, AppState>,
+    vault_path: &str,
+) -> Result<Connection, String> {
+    let path = canonical_opened_vault_path(state, Some(vault_path))?;
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| e.to_string())?;
+    configure_read_connection(&connection)?;
     Ok(connection)
 }
 
@@ -927,11 +934,38 @@ fn audit_change(field: &str, before: impl ToString, after: impl ToString) -> Aud
         field: field.to_string(),
         before: before.to_string(),
         after: after.to_string(),
+        machine: None,
     }
 }
 
-fn audit_text(value: Option<&str>) -> String {
-    value.unwrap_or("未填写").to_string()
+fn machine_change(
+    field: &str,
+    field_id: &str,
+    before: impl Serialize,
+    after: impl Serialize,
+) -> AuditChange {
+    let before = serde_json::to_value(before).expect("audit scalar serializes");
+    let after = serde_json::to_value(after).expect("audit scalar serializes");
+    let display = |value: &serde_json::Value| match value {
+        serde_json::Value::Null => "未填写".to_string(),
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Number(value) if field_id.ends_with("_fen") => value
+            .as_i64()
+            .map(format_money_fen)
+            .unwrap_or_else(|| value.to_string()),
+        _ => value.to_string(),
+    };
+    AuditChange {
+        field: field.to_string(),
+        before: display(&before),
+        after: display(&after),
+        machine: Some(AuditMachineChange {
+            version: 1,
+            field_id: field_id.to_string(),
+            before,
+            after,
+        }),
+    }
 }
 
 fn format_money_fen(amount_fen: i64) -> String {
@@ -1067,6 +1101,9 @@ fn merge_contiguous_person_tag_audit(
     {
         return Ok(());
     }
+    if current_change.machine.is_none() || previous_change.machine.is_none() {
+        return Ok(());
+    }
     let mut merged = serde_json::from_str::<serde_json::Value>(&previous.3)
         .map_err(|error| error.to_string())?;
     if let Some(object) = merged.as_object_mut() {
@@ -1084,11 +1121,19 @@ fn merge_contiguous_person_tag_audit(
         );
         object.insert(
             "changes".to_string(),
-            serde_json::to_value(vec![audit_change(
-                "人物标签",
-                &previous_change.before,
-                &current_change.after,
-            )])
+            serde_json::to_value(vec![{
+                let mut change =
+                    audit_change("人物标签", &previous_change.before, &current_change.after);
+                let mut machine = previous_change.machine.clone().ok_or("标签机器快照缺失")?;
+                machine.after = current_change
+                    .machine
+                    .as_ref()
+                    .ok_or("标签机器快照缺失")?
+                    .after
+                    .clone();
+                change.machine = Some(machine);
+                change
+            }])
             .map_err(|error| error.to_string())?,
         );
         if let Ok(current_object) = serde_json::from_str::<serde_json::Value>(&current.3) {
@@ -1122,6 +1167,7 @@ fn merge_contiguous_person_tag_audit(
 
 #[derive(Clone)]
 struct EntryAuditSnapshot {
+    person_id: String,
     book_title: String,
     person_name: String,
     address: Option<String>,
@@ -1131,6 +1177,9 @@ struct EntryAuditSnapshot {
     return_gift: Option<String>,
     return_gift_amount_fen: Option<i64>,
     tags: String,
+    tag_ids: Vec<String>,
+    received_at: String,
+    return_gifted_at: Option<String>,
 }
 
 struct ReturnGiftUpdateSnapshot {
@@ -1148,10 +1197,10 @@ fn entry_audit_snapshot(
     connection: &Connection,
     entry_id: &str,
 ) -> Result<EntryAuditSnapshot, String> {
-    connection
+    let mut snapshot = connection
         .query_row(
             "SELECT b.title, p.display_name, p.address, e.amount_fen, e.payment_method, e.note, e.return_gift, e.return_gift_amount_fen,
-                    COALESCE((SELECT GROUP_CONCAT(t.name, '、') FROM person_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.person_id = p.id AND t.deleted_at IS NULL), '')
+                    COALESCE((SELECT GROUP_CONCAT(t.name, '、') FROM person_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.person_id = p.id AND t.deleted_at IS NULL), ''), p.id, e.received_at, e.return_gifted_at
              FROM gift_entries e
              JOIN gift_books b ON b.id = e.book_id
              JOIN people p ON p.id = e.person_id
@@ -1162,16 +1211,31 @@ fn entry_audit_snapshot(
                     book_title: row.get(0)?,
                     person_name: row.get(1)?,
                     address: row.get(2)?,
-                    amount_fen: row.get(3)?,
+                    amount_fen: read_money_fen(row, 3)?,
                     payment_method: row.get(4)?,
                     note: row.get(5)?,
                     return_gift: row.get(6)?,
-                    return_gift_amount_fen: row.get(7)?,
+                    return_gift_amount_fen: read_optional_money_fen(row, 7)?,
                     tags: row.get(8)?,
+                    person_id: row.get(9)?,
+                    received_at: row.get(10)?,
+                    return_gifted_at: row.get(11)?,
+                    tag_ids: Vec::new(),
                 })
             },
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    snapshot.tag_ids = active_person_tag_ids(connection, &snapshot.person_id)?;
+    Ok(snapshot)
+}
+
+fn active_person_tag_ids(connection: &Connection, person_id: &str) -> Result<Vec<String>, String> {
+    let mut statement = connection.prepare("SELECT t.id FROM person_tags pt JOIN tags t ON t.id=pt.tag_id WHERE pt.person_id=? AND t.deleted_at IS NULL ORDER BY t.id").map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map(params![person_id], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 fn entry_audit_changes(
@@ -1179,75 +1243,108 @@ fn entry_audit_changes(
     after: &EntryAuditSnapshot,
 ) -> Vec<AuditChange> {
     let mut changes = Vec::new();
+    if before.person_id != after.person_id {
+        let mut change =
+            machine_change("人物关联", "person_id", &before.person_id, &after.person_id);
+        change.before = format!(
+            "{}（{}）",
+            before.person_name,
+            before.address.as_deref().unwrap_or("未填写地址")
+        );
+        change.after = format!(
+            "{}（{}）",
+            after.person_name,
+            after.address.as_deref().unwrap_or("未填写地址")
+        );
+        changes.push(change);
+    }
     if before.person_name != after.person_name {
-        changes.push(audit_change(
+        changes.push(machine_change(
             "姓名",
+            "person_name",
             &before.person_name,
             &after.person_name,
         ));
     }
     if before.address != after.address {
-        changes.push(audit_change(
+        changes.push(machine_change(
             "地址",
-            audit_text(before.address.as_deref()),
-            audit_text(after.address.as_deref()),
+            "address",
+            &before.address,
+            &after.address,
         ));
     }
     if before.amount_fen != after.amount_fen {
-        changes.push(audit_change(
-            "金额",
-            format_money_fen(before.amount_fen),
-            format_money_fen(after.amount_fen),
-        ));
+        let mut change = machine_change("金额", "amount_fen", before.amount_fen, after.amount_fen);
+        change.before = format_money_fen(before.amount_fen);
+        change.after = format_money_fen(after.amount_fen);
+        changes.push(change);
     }
     if before.payment_method != after.payment_method {
-        changes.push(audit_change(
+        changes.push(machine_change(
             "支付方式",
+            "payment_method",
             &before.payment_method,
             &after.payment_method,
         ));
     }
-    if before.note != after.note {
-        changes.push(audit_change(
-            "备注",
-            audit_text(before.note.as_deref()),
-            audit_text(after.note.as_deref()),
+    if before.received_at != after.received_at {
+        changes.push(machine_change(
+            "登记日期",
+            "received_at",
+            &before.received_at,
+            &after.received_at,
         ));
     }
+    if before.note != after.note {
+        changes.push(machine_change("备注", "note", &before.note, &after.note));
+    }
     if before.return_gift != after.return_gift {
-        changes.push(audit_change(
+        changes.push(machine_change(
             "回礼备注",
-            audit_text(before.return_gift.as_deref()),
-            audit_text(after.return_gift.as_deref()),
+            "return_gift",
+            &before.return_gift,
+            &after.return_gift,
         ));
     }
     if before.return_gift_amount_fen != after.return_gift_amount_fen {
-        changes.push(audit_change(
+        let mut change = machine_change(
             "回礼金额",
-            before
-                .return_gift_amount_fen
-                .map(format_money_fen)
-                .unwrap_or_else(|| "未填写".to_string()),
-            after
-                .return_gift_amount_fen
-                .map(format_money_fen)
-                .unwrap_or_else(|| "未填写".to_string()),
+            "return_gift_amount_fen",
+            before.return_gift_amount_fen,
+            after.return_gift_amount_fen,
+        );
+        change.before = before
+            .return_gift_amount_fen
+            .map(format_money_fen)
+            .unwrap_or_else(|| "未填写".to_string());
+        change.after = after
+            .return_gift_amount_fen
+            .map(format_money_fen)
+            .unwrap_or_else(|| "未填写".to_string());
+        changes.push(change);
+    }
+    if before.return_gifted_at != after.return_gifted_at {
+        changes.push(machine_change(
+            "回礼时间",
+            "return_gifted_at",
+            &before.return_gifted_at,
+            &after.return_gifted_at,
         ));
     }
-    if before.tags != after.tags {
-        changes.push(audit_change(
-            "人物标签",
-            if before.tags.is_empty() {
-                "未设置"
-            } else {
-                &before.tags
-            },
-            if after.tags.is_empty() {
-                "未设置"
-            } else {
-                &after.tags
-            },
-        ));
+    if before.tag_ids != after.tag_ids {
+        let mut change = machine_change("人物标签", "tag_ids", &before.tag_ids, &after.tag_ids);
+        change.before = if before.tags.is_empty() {
+            "未设置".to_string()
+        } else {
+            before.tags.clone()
+        };
+        change.after = if after.tags.is_empty() {
+            "未设置".to_string()
+        } else {
+            after.tags.clone()
+        };
+        changes.push(change);
     }
     changes
 }
@@ -1284,7 +1381,7 @@ fn vault_info(path: &Path, connection: &Connection) -> Result<VaultInfo, String>
         )
         .map_err(|e| e.to_string())?;
     Ok(VaultInfo {
-        path: path.to_string_lossy().to_string(),
+        path: displayable_path(path),
         name,
         notes,
         book_count,
@@ -1330,10 +1427,19 @@ fn validate_vault_connection(connection: &Connection) -> Result<(), String> {
     if integrity != "ok" {
         return Err(format!("礼金库完整性校验失败：{integrity}"));
     }
+    let foreign_key_errors: i64 = connection
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })
+        .map_err(|e| e.to_string())?;
+    if foreign_key_errors != 0 {
+        return Err("礼金库包含缺失关联，完整性校验失败".to_string());
+    }
     Ok(())
 }
 
 fn validate_vault_file(path: &Path) -> Result<(), String> {
+    let path = path.canonicalize().map_err(|error| error.to_string())?;
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| error.to_string())?;
     validate_vault_connection(&connection)
@@ -1358,7 +1464,7 @@ fn app_backup_root() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("com.codex.lijinbook")
+        .join("礼金簿—改动")
         .join("backups")
 }
 
@@ -1377,9 +1483,15 @@ struct VaultTrashManifest {
 }
 
 fn read_vault_trash_manifests() -> Result<Vec<VaultTrashManifest>, String> {
-    let directory = vault_trash_root();
+    read_vault_trash_directory(&vault_trash_root())
+}
+
+fn read_vault_trash_directory(directory: &Path) -> Result<Vec<VaultTrashManifest>, String> {
     if !directory.is_dir() {
         return Ok(Vec::new());
+    }
+    if metadata_is_reparse(&std::fs::symlink_metadata(directory).map_err(|e| e.to_string())?) {
+        return Err("回收站目录是链接或重解析点，未读取外部文件".to_string());
     }
     let mut manifests = Vec::new();
     for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
@@ -1391,10 +1503,45 @@ fn read_vault_trash_manifests() -> Result<Vec<VaultTrashManifest>, String> {
             continue;
         };
         if let Ok(manifest) = serde_json::from_str::<VaultTrashManifest>(&raw) {
-            if Path::new(&manifest.trash_path).is_file() {
+            if Uuid::parse_str(&manifest.id).is_err() {
+                continue;
+            }
+            let expected = directory.join(format!("{}.giftvault", manifest.id));
+            if std::fs::symlink_metadata(&expected)
+                .is_ok_and(|metadata| metadata_is_reparse(&metadata))
+            {
+                continue;
+            }
+            if expected.is_file()
+                && comparable_path(Path::new(&manifest.trash_path)) == comparable_path(&expected)
+            {
                 manifests.push(manifest);
             }
         }
+    }
+    // A crash or an invalid manifest must never hide the sole surviving snapshot.
+    for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata_is_reparse(&metadata)) {
+            continue;
+        }
+        if path.extension().and_then(|value| value.to_str()) != Some("giftvault") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if manifests.iter().any(|manifest| manifest.id == id) {
+            continue;
+        }
+        manifests.push(VaultTrashManifest {
+            id: id.to_string(),
+            original_path: String::new(),
+            trash_path: displayable_path(&path),
+            name: "待核对原路径的礼金库快照（保留中）".to_string(),
+            deleted_at: String::new(),
+        });
     }
     manifests.sort_by(|left, right| right.deleted_at.cmp(&left.deleted_at));
     Ok(manifests)
@@ -1405,9 +1552,7 @@ fn trash_vault_file(path: &Path, state: &State<'_, AppState>) -> Result<(), Stri
     if is_edit_locked(state)? {
         return Err("编辑已锁定，请先解锁编辑".to_string());
     }
-    let source = path
-        .canonicalize()
-        .map_err(|_| "找不到礼金库文件".to_string())?;
+    let source = canonical_opened_vault_path(state, Some(&displayable_path(path)))?;
     if source.extension().and_then(|value| value.to_str()) != Some("giftvault") {
         return Err("只能删除礼金库文件".to_string());
     }
@@ -1418,36 +1563,42 @@ fn trash_vault_file(path: &Path, state: &State<'_, AppState>) -> Result<(), Stri
         return Err("当前正在操作的礼金库不能从比较区删除，请先切换到其他礼金库".to_string());
     }
     validate_vault_file(&source)?;
-    let read_connection = Connection::open_with_flags(&source, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    trash_vault_into_directory(&source, &vault_trash_root(), &Uuid::new_v4().to_string())?;
+    forget_opened_vault_path(state, &source)?;
+    Ok(())
+}
+
+fn trash_vault_into_directory(source: &Path, directory: &Path, id: &str) -> Result<(), String> {
+    Uuid::parse_str(id).map_err(|_| "回收记录标识无效".to_string())?;
+    let read_connection = Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| e.to_string())?;
-    let name = comparison_vault_name(&read_connection, &source)?;
-    let id = Uuid::new_v4().to_string();
-    let directory = vault_trash_root();
-    std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    let name = comparison_vault_name(&read_connection, source)?;
+    drop(read_connection);
+    std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
     let trash_path = directory.join(format!("{id}.giftvault"));
     let deleted_at = now();
     let manifest = VaultTrashManifest {
-        id: id.clone(),
-        original_path: displayable_path(&source),
+        id: id.to_string(),
+        original_path: displayable_path(source),
         trash_path: displayable_path(&trash_path),
         name,
         deleted_at,
     };
-    snapshot_vault(&source, &trash_path)?;
-    if let Err(error) = std::fs::remove_file(&source) {
-        let _ = std::fs::remove_file(&trash_path);
-        return Err(error.to_string());
-    }
+    snapshot_vault(source, &trash_path)?;
     let manifest_path = directory.join(format!("{id}.json"));
-    if let Err(error) = std::fs::write(
-        &manifest_path,
-        serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
-    ) {
-        let _ = std::fs::copy(&trash_path, &source);
-        let _ = std::fs::remove_file(&trash_path);
-        return Err(error.to_string());
-    }
-    let _ = forget_opened_vault_path(state, &source);
+    let bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&manifest_path)
+        .map_err(|e| format!("回收记录写入失败，原库及快照已保留：{e}"))?;
+    use std::io::Write;
+    file.write_all(&bytes)
+        .and_then(|_| file.sync_all())
+        .map_err(|e| format!("回收记录保存失败，原库及快照已保留：{e}"))?;
+    drop(file);
+    std::fs::remove_file(source)
+        .map_err(|e| format!("原库删除失败，原库和可恢复快照已保留：{e}"))?;
     Ok(())
 }
 
@@ -1460,18 +1611,55 @@ fn restore_vault_file(id: &str, state: &State<'_, AppState>) -> Result<(), Strin
         .into_iter()
         .find(|item| item.id == id)
         .ok_or_else(|| "找不到礼金库回收记录".to_string())?;
-    let original = PathBuf::from(&manifest.original_path);
-    if original.exists() {
-        return Err("原礼金库路径已有文件，无法覆盖恢复".to_string());
-    }
-    snapshot_vault(Path::new(&manifest.trash_path), &original)?;
-    std::fs::remove_file(&manifest.trash_path).map_err(|e| e.to_string())?;
+    let original = match vault_restore_original_destination(&manifest)? {
+        Some(path) => path,
+        None => normalize_vault_path(
+            &choose_file_path(
+                "save",
+                "恢复礼金库另存为",
+                &["giftvault"],
+                "恢复的礼金库.giftvault",
+            )
+            .ok_or_else(|| format!("已取消另存恢复；快照保留于 {}", manifest.trash_path))?,
+        ),
+    };
+    restore_vault_snapshot_to(Path::new(&manifest.trash_path), &original)?;
     let _ = std::fs::remove_file(vault_trash_root().join(format!("{id}.json")));
+    Ok(())
+}
+
+fn vault_restore_original_destination(
+    manifest: &VaultTrashManifest,
+) -> Result<Option<PathBuf>, String> {
+    let original = PathBuf::from(&manifest.original_path);
+    if manifest.original_path.is_empty() {
+        return Ok(None);
+    }
+    if original.exists() {
+        return Err(format!(
+            "原礼金库路径已有文件，可能是删除未完成；恢复不会覆盖文件。快照保留于 {}",
+            manifest.trash_path
+        ));
+    }
+    Ok(Some(original))
+}
+
+fn restore_vault_snapshot_to(snapshot: &Path, destination: &Path) -> Result<(), String> {
+    snapshot_vault(snapshot, destination)?;
+    std::fs::remove_file(snapshot).map_err(|e| {
+        format!(
+            "礼金库已另存于 {}，回收副本保留但清理失败：{e}",
+            displayable_path(destination)
+        )
+    })?;
     Ok(())
 }
 
 fn empty_vault_trash() -> Result<(), String> {
     for manifest in read_vault_trash_manifests()? {
+        if manifest.original_path.is_empty() {
+            continue;
+        }
         let _ = std::fs::remove_file(&manifest.trash_path);
         let _ = std::fs::remove_file(vault_trash_root().join(format!("{}.json", manifest.id)));
     }
@@ -1484,20 +1672,93 @@ fn trash_vault(path: String, state: State<'_, AppState>) -> Result<(), String> {
 }
 
 fn snapshot_vault(source: &Path, destination: &Path) -> Result<(), String> {
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let connection = Connection::open(source).map_err(|e| e.to_string())?;
-    connection
-        .execute(
-            "VACUUM INTO ?",
-            params![destination.to_string_lossy().to_string()],
-        )
+    validate_vault_file(source)?;
+    publish_vault_file(destination, |temporary| {
+        copy_vault_read_only(source, temporary)
+    })
+    .map_err(|error| format!("礼金库快照失败，已阻止写入：{error}"))
+}
+
+fn publish_vault_file(
+    destination: &Path,
+    write: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let parent = destination.parent().ok_or("目标文件没有父目录")?;
+    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let temporary = parent.join(format!(".giftvault-{}.tmp", Uuid::new_v4()));
+    let owned = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
         .map_err(|e| e.to_string())?;
+    drop(owned);
+    let result = (|| {
+        write(&temporary)?;
+        validate_vault_file(&temporary)?;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&temporary)
+            .and_then(|file| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        publish_no_replace(&temporary, destination)
+            .map_err(|e| format!("发布礼金库失败（目标可能已存在）：{e}"))?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&temporary);
+    result
+}
+
+#[cfg(windows)]
+fn publish_no_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, destination: *const u16, flags: u32) -> i32;
+    }
+    let temporary = temporary.canonicalize()?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidInput, "目标没有父目录"))?
+        .canonicalize()?;
+    let destination =
+        parent.join(destination.file_name().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "目标没有文件名")
+        })?);
+    let source: Vec<u16> = temporary.as_os_str().encode_wide().chain(Some(0)).collect();
+    let target: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    // Same-directory rename supports removable filesystems too. No
+    // REPLACE_EXISTING or COPY_ALLOWED flag: concurrent winners are preserved.
+    // SAFETY: both pointers refer to live, nul-terminated UTF-16 buffers.
+    if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), 0x8) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
     Ok(())
 }
 
+#[cfg(not(windows))]
+fn publish_no_replace(temporary: &Path, destination: &Path) -> std::io::Result<()> {
+    std::fs::hard_link(temporary, destination)
+}
+
 fn copy_vault_read_only(source: &Path, destination: &Path) -> Result<(), String> {
+    let source = source.canonicalize().map_err(|error| error.to_string())?;
+    let destination = if destination.exists() {
+        destination
+            .canonicalize()
+            .map_err(|error| error.to_string())?
+    } else {
+        destination
+            .parent()
+            .ok_or("快照目标没有父目录")?
+            .canonicalize()
+            .map_err(|error| error.to_string())?
+            .join(destination.file_name().ok_or("快照目标没有文件名")?)
+    };
     let source = Connection::open_with_flags(source, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|error| error.to_string())?;
     let mut destination = Connection::open(destination).map_err(|error| error.to_string())?;
@@ -1512,41 +1773,171 @@ fn automatic_backup_path(directory: &Path, prefix: &str) -> PathBuf {
     directory.join(format!("{prefix}-{timestamp}-{}.giftvault", Uuid::new_v4()))
 }
 
-fn prune_automatic_backups(directory: &Path) -> Result<(), String> {
-    let mut backups = std::fs::read_dir(directory)
-        .map_err(|e| e.to_string())?
-        .filter_map(Result::ok)
+fn prune_automatic_backups(directory: &Path, protected: Option<&Path>) -> Result<(), String> {
+    if metadata_is_reparse(&std::fs::symlink_metadata(directory).map_err(|e| e.to_string())?) {
+        return Err("备份目录是链接或重解析点，未执行轮换".to_string());
+    }
+    let root = directory.canonicalize().map_err(|e| e.to_string())?;
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(&root).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+        if metadata_is_reparse(&metadata) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if metadata.is_dir()
+            && name.len() == 64
+            && name.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            for child in std::fs::read_dir(entry.path()).map_err(|e| e.to_string())? {
+                let child = child.map_err(|e| e.to_string())?;
+                let metadata =
+                    std::fs::symlink_metadata(child.path()).map_err(|e| e.to_string())?;
+                if metadata.is_file() && !metadata_is_reparse(&metadata) {
+                    entries.push(child);
+                }
+            }
+        } else if metadata.is_file() {
+            entries.push(entry);
+        }
+    }
+    let mut backups = entries
+        .into_iter()
         .filter(|entry| {
+            let name = entry.file_name().to_string_lossy().to_string();
             entry.path().extension().and_then(|value| value.to_str()) == Some("giftvault")
+                && !name.starts_with("manual-")
+                && backup_timestamp(&name).is_some()
         })
         .collect::<Vec<_>>();
-    backups.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
+    // The reason prefix is not a chronological key. Legacy and current names
+    // both contain YYYYMMDD-HHMMSS-mmm after their (possibly hyphenated) reason.
+    backups.sort_by_key(|entry| {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let timestamp = backup_timestamp(&name).unwrap_or_default();
+        let modified = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        std::cmp::Reverse((
+            protected.is_some_and(|path| comparable_path(path) == comparable_path(&entry.path())),
+            timestamp,
+            modified,
+            name,
+        ))
+    });
     for backup in backups.into_iter().skip(10) {
-        std::fs::remove_file(backup.path()).map_err(|e| e.to_string())?;
+        let metadata = std::fs::symlink_metadata(backup.path()).map_err(|e| e.to_string())?;
+        let target = backup.path().canonicalize().map_err(|e| e.to_string())?;
+        if metadata_is_reparse(&metadata) || !target.starts_with(&root) {
+            return Err("备份路径已改变或离开轮换目录，未删除文件".to_string());
+        }
+        std::fs::remove_file(target).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
 
-fn auto_backup(state: &State<'_, AppState>, reason: &str, high_risk: bool) -> Result<(), String> {
-    let path = state
-        .vault_path
-        .lock()
-        .map_err(|_| "礼金库状态不可用".to_string())?
-        .clone()
-        .ok_or_else(|| "请先打开礼金库".to_string())?;
-    auto_backup_for_path(&path, reason, high_risk)
+fn metadata_is_reparse(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        metadata.file_type().is_symlink()
+    }
+}
+
+fn reject_linked_backup_directory(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata_is_reparse(&metadata) || !metadata.is_dir() => {
+            Err("备份路径不是普通目录，已阻止写入".to_string())
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn backup_timestamp(name: &str) -> Option<String> {
+    name.as_bytes()
+        .windows(15)
+        .enumerate()
+        .find_map(|(index, part)| {
+            if part[8] != b'-'
+                || !part[..8].iter().all(u8::is_ascii_digit)
+                || !part[9..].iter().all(u8::is_ascii_digit)
+            {
+                return None;
+            }
+            let seconds = name.get(index..index + 15)?;
+            NaiveDateTime::parse_from_str(seconds, "%Y%m%d-%H%M%S").ok()?;
+            let milliseconds = name
+                .get(index + 16..index + 19)
+                .filter(|digits| {
+                    name.get(index + 15..index + 16) == Some("-")
+                        && digits.bytes().all(|byte| byte.is_ascii_digit())
+                })
+                .unwrap_or("000");
+            Some(format!("{seconds}-{milliseconds}"))
+        })
 }
 
 fn auto_backup_for_path(path: &Path, reason: &str, high_risk: bool) -> Result<(), String> {
+    auto_backup_in_root(path, &app_backup_root(), reason, high_risk)
+        .map_err(|error| format!("自动备份失败，已阻止写入：{error}"))
+}
+
+fn auto_backup_in_root(
+    path: &Path,
+    root: &Path,
+    reason: &str,
+    high_risk: bool,
+) -> Result<(), String> {
+    validate_vault_file(path)?;
     let connection = Connection::open(path).map_err(|e| e.to_string())?;
-    let vault_id: String = connection
+    let vault_id: Option<String> = connection
         .query_row(
             "SELECT value FROM vault_meta WHERE key = 'vault_id'",
             [],
             |row| row.get(0),
         )
+        .optional()
         .map_err(|e| e.to_string())?;
-    let directory = app_backup_root().join(vault_id);
+    if vault_id
+        .as_deref()
+        .is_some_and(|value| Uuid::parse_str(value).is_err())
+    {
+        return Err("礼金库标识不是合法 UUID，无法安全创建自动备份，已阻止写入".to_string());
+    }
+    let key = vault_id.unwrap_or_else(|| {
+        format!(
+            "legacy-{:x}",
+            Sha256::digest(comparable_path(path).as_bytes())
+        )
+    });
+    if key.is_empty()
+        || key.len() > 128
+        || !key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err("礼金库标识无效，无法安全创建自动备份，已阻止写入".to_string());
+    }
+    // Exported copies can intentionally retain the same vault_id. Their first
+    // daily writes must have independent snapshots; never rewrite either ID.
+    let canonical_source = path.canonicalize().map_err(|e| e.to_string())?;
+    let source_key = format!(
+        "{:x}",
+        Sha256::digest(comparable_path(&canonical_source).as_bytes())
+    );
+    let family = root.join(key);
+    let directory = family.join(source_key);
+    for candidate in [root, family.as_path(), directory.as_path()] {
+        reject_linked_backup_directory(candidate)?;
+    }
     std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
     let day = Local::now().format("%Y%m%d").to_string();
     let has_daily_backup = std::fs::read_dir(&directory)
@@ -1557,6 +1948,7 @@ fn auto_backup_for_path(path: &Path, reason: &str, high_risk: bool) -> Result<()
                 .file_name()
                 .to_string_lossy()
                 .starts_with(&format!("daily-{day}"))
+                && validate_vault_file(&entry.path()).is_ok()
         });
     if !high_risk && has_daily_backup {
         return Ok(());
@@ -1564,7 +1956,8 @@ fn auto_backup_for_path(path: &Path, reason: &str, high_risk: bool) -> Result<()
     let prefix = if high_risk { reason } else { "daily" };
     let destination = automatic_backup_path(&directory, prefix);
     snapshot_vault(path, &destination)?;
-    prune_automatic_backups(&directory)
+    prune_automatic_backups(&family, Some(&destination))?;
+    validate_vault_file(&destination)
 }
 
 #[tauri::command]
@@ -1986,18 +2379,10 @@ fn create_vault(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let connection = Connection::open(&path).map_err(|e| e.to_string())?;
-    migrate(&connection)?;
-    let transaction = connection
-        .unchecked_transaction()
+    create_vault_file(&path, &name, &notes)?;
+    let path = path.canonicalize().map_err(|e| e.to_string())?;
+    let connection = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|e| e.to_string())?;
-    transaction
-        .execute(
-            "INSERT OR REPLACE INTO vault_meta(key, value) VALUES ('name', ?), ('notes', ?)",
-            params![name.trim(), notes.trim()],
-        )
-        .map_err(|e| e.to_string())?;
-    transaction.commit().map_err(|e| e.to_string())?;
     *state
         .vault_path
         .lock()
@@ -2006,17 +2391,41 @@ fn create_vault(
     vault_open_result(&path, &connection, SessionRole::Admin)
 }
 
+fn create_vault_file(path: &Path, name: &str, notes: &str) -> Result<(), String> {
+    validate_text("礼金库名称", name, 256)?;
+    validate_text("礼金库备注", notes, 65536)?;
+    if name.trim().is_empty() {
+        return Err("礼金库名称不能为空".to_string());
+    }
+    publish_vault_file(path, |temporary| {
+        let temporary = temporary
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+        let mut connection = Connection::open(temporary).map_err(|e| e.to_string())?;
+        migrate(&connection)?;
+        let transaction = connection.transaction().map_err(|e| e.to_string())?;
+        transaction
+            .execute(
+                "INSERT OR REPLACE INTO vault_meta(key,value) VALUES ('name',?), ('notes',?)",
+                params![name.trim(), notes.trim()],
+            )
+            .map_err(|e| e.to_string())?;
+        transaction.commit().map_err(|e| e.to_string())
+    })
+}
+
 #[tauri::command]
 fn edit_vault(
     name: String,
     notes: String,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<VaultInfo, String> {
     if name.trim().is_empty() {
         return Err("礼金库名称不能为空".to_string());
     }
-    let mut connection = admin_connection(&state, "edit-vault", false)?;
-    let path = active_vault_path(&state)?;
+    let mut connection = admin_connection(&state, &vault_path, "edit-vault", false)?;
+    let path = canonical_opened_vault_path(&state, Some(&vault_path))?;
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -2036,17 +2445,24 @@ fn edit_vault(
         .optional()
         .map_err(|error| error.to_string())?
         .unwrap_or_default();
+    if name != old_name {
+        validate_text("礼金库名称", &name, 256)?;
+    }
+    if notes != old_notes {
+        validate_text("礼金库备注", &notes, 65536)?;
+    }
     let next_name = name.trim().to_string();
     let next_notes = notes.trim().to_string();
     let mut changes = Vec::new();
     if old_name != next_name {
-        changes.push(audit_change("礼金库名称", &old_name, &next_name));
+        changes.push(machine_change("礼金库名称", "name", &old_name, &next_name));
     }
     if old_notes != next_notes {
-        changes.push(audit_change(
+        changes.push(machine_change(
             "礼金库备注",
-            audit_text(null_if_empty(&old_notes).as_deref()),
-            audit_text(null_if_empty(&next_notes).as_deref()),
+            "notes",
+            &old_notes,
+            &next_notes,
         ));
     }
     transaction
@@ -2077,14 +2493,13 @@ fn edit_vault(
         )?;
     }
     transaction.commit().map_err(|error| error.to_string())?;
-    let connection = active_connection(&state)?;
     vault_info(&path, &connection)
 }
 
 #[tauri::command]
-fn current_vault_info(state: State<'_, AppState>) -> Result<VaultInfo, String> {
-    let path = active_vault_path(&state)?;
-    let connection = active_connection(&state)?;
+fn current_vault_info(vault_path: String, state: State<'_, AppState>) -> Result<VaultInfo, String> {
+    let path = canonical_opened_vault_path(&state, Some(&vault_path))?;
+    let connection = scoped_read_connection(&state, &vault_path)?;
     vault_info(&path, &connection)
 }
 
@@ -2094,6 +2509,7 @@ fn open_vault(path: String, state: State<'_, AppState>) -> Result<VaultOpenResul
     if !path.is_file() {
         return Err("找不到礼金库文件".to_string());
     }
+    let path = path.canonicalize().map_err(|error| error.to_string())?;
     let role = if is_admin_session(&state)? {
         SessionRole::Admin
     } else {
@@ -2144,6 +2560,34 @@ fn close_vault(state: State<'_, AppState>) -> Result<(), String> {
         .lock()
         .map_err(|_| "礼金库状态不可用".to_string())? = None;
     clear_opened_vault_paths(&state)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn close_opened_vault(vault_path: String, state: State<'_, AppState>) -> Result<(), String> {
+    close_opened_vault_path(&state, Path::new(&vault_path))
+}
+
+fn close_opened_vault_path(state: &AppState, path: &Path) -> Result<(), String> {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let key = comparable_path(&path);
+    let mut active = state
+        .vault_path
+        .lock()
+        .map_err(|_| "礼金库状态不可用".to_string())?;
+    let mut opened = state
+        .opened_vault_paths
+        .lock()
+        .map_err(|_| "礼金库打开状态不可用".to_string())?;
+    opened.retain(|item| comparable_path(item) != key);
+    if active.as_ref().is_some_and(|item| {
+        comparable_path(&item.canonicalize().unwrap_or_else(|_| item.clone())) == key
+    }) {
+        *active = opened.last().cloned();
+    }
+    if opened.is_empty() {
+        *active = None;
+    }
     Ok(())
 }
 
@@ -2263,8 +2707,8 @@ fn change_app_admin_pin(
 }
 
 #[tauri::command]
-fn list_books(state: State<'_, AppState>) -> Result<Vec<GiftBook>, String> {
-    let connection = active_connection(&state)?;
+fn list_books(vault_path: String, state: State<'_, AppState>) -> Result<Vec<GiftBook>, String> {
+    let connection = scoped_read_connection(&state, &vault_path)?;
     let mut statement = connection.prepare("SELECT id, title, occasion, event_date, location, notes, created_at, source_file_name, source_file_path, source_imported_at FROM gift_books WHERE deleted_at IS NULL ORDER BY COALESCE(event_date, created_at) DESC").map_err(|e| e.to_string())?;
     let rows = statement
         .query_map([], |row| {
@@ -2329,12 +2773,22 @@ fn create_book(
     event_date: String,
     location: String,
     notes: String,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<GiftBook, String> {
+    for (label, value, max) in [
+        ("礼金簿名称", &title, 256),
+        ("活动类型", &occasion, 256),
+        ("地点", &location, 4096),
+        ("备注", &notes, 65536),
+    ] {
+        validate_text(label, value, max)?;
+    }
+    validate_date(&event_date, true)?;
     if title.trim().is_empty() {
         return Err("礼金簿名称不能为空".to_string());
     }
-    let mut connection = admin_connection(&state, "create-book", false)?;
+    let mut connection = admin_connection(&state, &vault_path, "create-book", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let id = Uuid::new_v4().to_string();
     let timestamp = now();
@@ -2370,13 +2824,14 @@ fn create_book(
 fn edit_book(
     book_id: String,
     input: EditBookInput,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<GiftBook, String> {
     if input.title.trim().is_empty() {
         return Err("礼金簿名称不能为空".to_string());
     }
 
-    let mut connection = admin_connection(&state, "edit-book", false)?;
+    let mut connection = admin_connection(&state, &vault_path, "edit-book", false)?;
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -2404,6 +2859,39 @@ fn edit_book(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "礼金簿不存在或已移入回收站".to_string())?;
 
+    for (label, value, previous, max) in [
+        (
+            "礼金簿名称",
+            input.title.as_str(),
+            existing.title.as_str(),
+            256,
+        ),
+        (
+            "活动类型",
+            input.occasion.as_str(),
+            existing.occasion.as_str(),
+            256,
+        ),
+        (
+            "地点",
+            input.location.as_str(),
+            existing.location.as_deref().unwrap_or_default(),
+            4096,
+        ),
+        (
+            "备注",
+            input.notes.as_str(),
+            existing.notes.as_deref().unwrap_or_default(),
+            65536,
+        ),
+    ] {
+        if value != previous {
+            validate_text(label, value, max)?;
+        }
+    }
+    if input.event_date != existing.event_date.as_deref().unwrap_or_default() {
+        validate_date(&input.event_date, true)?;
+    }
     let title = input.title.trim().to_string();
     let occasion = input.occasion.trim().to_string();
     let event_date = null_if_empty(&input.event_date);
@@ -2411,31 +2899,39 @@ fn edit_book(
     let notes = null_if_empty(&input.notes);
     let mut changes = Vec::new();
     if existing.title != title {
-        changes.push(audit_change("礼金簿名称", &existing.title, &title));
+        changes.push(machine_change(
+            "礼金簿名称",
+            "title",
+            &existing.title,
+            &title,
+        ));
     }
     if existing.occasion != occasion {
-        changes.push(audit_change("活动类型", &existing.occasion, &occasion));
+        changes.push(machine_change(
+            "活动类型",
+            "occasion",
+            &existing.occasion,
+            &occasion,
+        ));
     }
     if existing.event_date != event_date {
-        changes.push(audit_change(
+        changes.push(machine_change(
             "活动日期",
-            audit_text(existing.event_date.as_deref()),
-            audit_text(event_date.as_deref()),
+            "event_date",
+            &existing.event_date,
+            &event_date,
         ));
     }
     if existing.location != location {
-        changes.push(audit_change(
+        changes.push(machine_change(
             "地点",
-            audit_text(existing.location.as_deref()),
-            audit_text(location.as_deref()),
+            "location",
+            &existing.location,
+            &location,
         ));
     }
     if existing.notes != notes {
-        changes.push(audit_change(
-            "备注",
-            audit_text(existing.notes.as_deref()),
-            audit_text(notes.as_deref()),
-        ));
+        changes.push(machine_change("备注", "notes", &existing.notes, &notes));
     }
 
     transaction
@@ -2476,8 +2972,12 @@ fn edit_book(
 }
 
 #[tauri::command]
-fn restore_book(book_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let mut connection = admin_connection(&state, "restore-book", false)?;
+fn restore_book(
+    book_id: String,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut connection = admin_connection(&state, &vault_path, "restore-book", false)?;
     restore_book_record(&mut connection, &book_id)
 }
 
@@ -2512,6 +3012,96 @@ fn restore_book_record(connection: &mut Connection, book_id: &str) -> Result<(),
 fn null_if_empty(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_string())
+}
+
+// Twelve decimal digits in fen keep both JS integers and Excel's 15-digit
+// numeric cells accurate. New inputs and totals reject larger values explicitly.
+const MAX_SAFE_FEN: i64 = 999_999_999_999;
+
+fn checked_money_total(amounts: impl IntoIterator<Item = i64>) -> Result<i64, String> {
+    amounts.into_iter().try_fold(0_i64, |total, amount| {
+        total
+            .checked_add(amount)
+            .filter(|sum| (-MAX_SAFE_FEN..=MAX_SAFE_FEN).contains(sum))
+            .ok_or_else(|| format!("金额合计超过安全范围 {MAX_SAFE_FEN} 分，无法准确显示或导出"))
+    })
+}
+
+fn validate_amount(amount: i64) -> Result<(), String> {
+    if !(1..=MAX_SAFE_FEN).contains(&amount) {
+        return Err(format!("金额必须在 1 到 {MAX_SAFE_FEN} 分之间"));
+    }
+    Ok(())
+}
+
+fn read_money_fen(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<i64> {
+    let amount: i64 = row.get(index)?;
+    if !(-MAX_SAFE_FEN..=MAX_SAFE_FEN).contains(&amount) {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "金额或合计超过安全范围 {MAX_SAFE_FEN} 分，无法准确显示或导出"
+        )));
+    }
+    Ok(amount)
+}
+
+fn read_optional_money_fen(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Option<i64>> {
+    let amount: Option<i64> = row.get(index)?;
+    if amount.is_some_and(|amount| !(-MAX_SAFE_FEN..=MAX_SAFE_FEN).contains(&amount)) {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "回礼金额超过安全范围，无法准确显示或导出".to_string(),
+        ));
+    }
+    Ok(amount)
+}
+
+fn ensure_money_totals_safe(connection: &Connection) -> Result<(), String> {
+    connection.query_row(
+        "SELECT COALESCE(SUM(e.amount_fen),0), COALESCE(SUM(e.return_gift_amount_fen),0) FROM gift_entries e JOIN gift_books b ON b.id=e.book_id JOIN people p ON p.id=e.person_id WHERE e.deleted_at IS NULL AND b.deleted_at IS NULL AND p.deleted_at IS NULL",
+        [], |row| { read_money_fen(row,0)?; read_money_fen(row,1)?; Ok(()) },
+    ).map_err(|e| format!("金额合计无法准确显示或导出：{e}"))
+}
+
+fn validate_text(label: &str, value: &str, maximum: usize) -> Result<(), String> {
+    if value.chars().count() > maximum || value.contains('\0') {
+        return Err(format!("{label}最多 {maximum} 个字符且不能包含空字符"));
+    }
+    Ok(())
+}
+
+fn validate_date(value: &str, allow_empty: bool) -> Result<(), String> {
+    if value.trim().is_empty() && allow_empty {
+        return Ok(());
+    }
+    let normalized = normalize_imported_received_at(value);
+    if NaiveDateTime::parse_from_str(&normalized, "%Y-%m-%d %H:%M:%S").is_err() {
+        return Err(format!("日期无法识别：{value}"));
+    }
+    Ok(())
+}
+
+fn validate_import_row(row: &[String], analysis: &SheetAnalysis) -> Result<(), String> {
+    for (label, index, max) in [
+        ("姓名", analysis.name_index, 256),
+        ("地址", analysis.address_index, 4096),
+        ("支付方式", analysis.payment_index, 256),
+        ("备注", analysis.note_index, 65536),
+        ("回礼备注", analysis.return_gift_index, 65536),
+        ("标签", analysis.tag_index, 16384),
+    ] {
+        if let Some(value) = index.and_then(|i| row.get(i)) {
+            validate_text(label, value, max)?;
+        }
+    }
+    for index in [analysis.date_index, analysis.return_gifted_at_index]
+        .into_iter()
+        .flatten()
+    {
+        if let Some(value) = row.get(index) {
+            validate_date(value, true)?;
+        }
+    }
+    optional_imported_amount(row, analysis.return_gift_amount_index)?;
+    Ok(())
 }
 
 fn received_at_or_now(value: &str) -> String {
@@ -3034,9 +3624,16 @@ fn parse_amount_fen(value: &str) -> Option<i64> {
         } else {
             decimals.parse::<i64>().ok()?
         };
-        return whole.checked_mul(100)?.checked_add(decimal);
+        return whole
+            .checked_mul(100)?
+            .checked_add(decimal)
+            .filter(|amount| *amount <= MAX_SAFE_FEN);
     }
-    normalized.parse::<i64>().ok()?.checked_mul(100)
+    normalized
+        .parse::<i64>()
+        .ok()?
+        .checked_mul(100)
+        .filter(|amount| *amount <= MAX_SAFE_FEN)
 }
 
 #[derive(Debug, Clone)]
@@ -3196,6 +3793,26 @@ fn analyze_sheet(sheet: &ParsedSheet) -> SheetAnalysis {
                 ));
                 continue;
             }
+            let validation = SheetAnalysis {
+                name_index: Some(name_index),
+                amount_index: Some(amount_index),
+                address_index,
+                payment_index,
+                date_index,
+                note_index,
+                return_gift_index,
+                return_gift_amount_index,
+                return_gifted_at_index,
+                tag_index,
+                errors: Vec::new(),
+                invalid_rows: Vec::new(),
+                valid_rows: 0,
+            };
+            if let Err(error) = validate_import_row(row, &validation) {
+                invalid_rows.push(index);
+                errors.push(format!("第 {} 行{error}", index + sheet.header_row + 1));
+                continue;
+            }
             valid_rows += 1;
         }
     }
@@ -3302,6 +3919,13 @@ fn analyze_sheet_with_mapping(
                     index + sheet.header_row + 1,
                     amount
                 ));
+                continue;
+            }
+            if let Err(error) = validate_import_row(row, &analysis) {
+                analysis.invalid_rows.push(index);
+                analysis
+                    .errors
+                    .push(format!("第 {} 行{error}", index + sheet.header_row + 1));
                 continue;
             }
             analysis.valid_rows += 1;
@@ -3469,15 +4093,14 @@ fn ensure_import_tags_are_available(
 
 fn spreadsheet_preview_result(
     path: &str,
+    vault_path: &str,
     state: &State<'_, AppState>,
     sheet: ParsedSheet,
     analysis: SheetAnalysis,
     suggested_mapping: SpreadsheetColumnMapping,
 ) -> Result<SpreadsheetPreview, String> {
-    let existing = active_connection(state)
-        .ok()
-        .and_then(|connection| load_tag_catalog(&connection).ok())
-        .unwrap_or_default();
+    let connection = scoped_read_connection(state, vault_path)?;
+    let existing = load_tag_catalog(&connection)?;
     let tag_preview = analysis
         .tag_index
         .map(|index| tag_previews(&sheet, Some(index), &existing));
@@ -3505,12 +4128,20 @@ fn spreadsheet_preview_result(
 #[tauri::command]
 fn preview_spreadsheet(
     path: String,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<SpreadsheetPreview, String> {
     let sheet = parse_sheet(&path)?;
     let analysis = analyze_sheet(&sheet);
     let suggested_mapping = mapping_from_analysis(&analysis);
-    spreadsheet_preview_result(&path, &state, sheet, analysis, suggested_mapping)
+    spreadsheet_preview_result(
+        &path,
+        &vault_path,
+        &state,
+        sheet,
+        analysis,
+        suggested_mapping,
+    )
 }
 
 #[tauri::command]
@@ -3519,24 +4150,33 @@ fn preview_spreadsheet_mapping(
     sheet_name: Option<String>,
     header_row: Option<usize>,
     mapping: SpreadsheetColumnMapping,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<SpreadsheetPreview, String> {
     let sheet = parse_sheet_selection(&path, sheet_name.as_deref(), header_row)?;
     let suggested_mapping = mapping_from_analysis(&analyze_sheet(&sheet));
     let analysis = analyze_sheet_with_mapping(&sheet, &mapping);
-    spreadsheet_preview_result(&path, &state, sheet, analysis, suggested_mapping)
+    spreadsheet_preview_result(
+        &path,
+        &vault_path,
+        &state,
+        sheet,
+        analysis,
+        suggested_mapping,
+    )
 }
 
 #[tauri::command]
 fn import_spreadsheet(
     path: String,
     book_id: String,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<SpreadsheetImportResult, String> {
     let sheet = parse_sheet(&path)?;
     let analysis = analyze_sheet(&sheet);
     validate_spreadsheet_import(&analysis)?;
-    let mut connection = admin_connection(&state, "import", true)?;
+    let mut connection = admin_connection(&state, &vault_path, "import", true)?;
     ensure_import_tags_are_available(&connection, &sheet, &analysis)?;
     import_sheet_into_book(&mut connection, &sheet, &analysis, &book_id)
 }
@@ -3564,6 +4204,16 @@ fn import_sheet_into_transaction(
     book_id: &str,
     catalog: &mut HashMap<String, TagCatalogEntry>,
 ) -> Result<SpreadsheetImportResult, String> {
+    let active: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM gift_books WHERE id=? AND deleted_at IS NULL)",
+            params![book_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !active {
+        return Err("导入目标礼金簿不存在或已在回收站中".to_string());
+    }
     let (name_index, amount_index) = (
         analysis.name_index.ok_or("缺少姓名列")?,
         analysis.amount_index.ok_or("缺少金额列")?,
@@ -3651,26 +4301,11 @@ fn import_sheet_into_transaction(
             .into_iter()
             .map(|name| (normalize_tag_name(&name), name))
             .collect::<Vec<_>>();
-        let person: Option<String> = transaction
-            .query_row(
-                "SELECT id FROM people WHERE display_name = ? AND COALESCE(address, '') = COALESCE(?, '') AND deleted_at IS NULL LIMIT 1",
-                params![person_name, null_if_empty(&address)],
-                |query| query.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        let person_id = if let Some(id) = person {
-            id
-        } else {
-            let id = Uuid::new_v4().to_string();
-            transaction
-                .execute(
-                    "INSERT INTO people(id, display_name, address, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                    params![id, person_name, null_if_empty(&address), timestamp, timestamp],
-                )
-                .map_err(|e| e.to_string())?;
-            id
-        };
+        let person_id = Uuid::new_v4().to_string();
+        transaction.execute(
+            "INSERT INTO people(id, display_name, address, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            params![person_id, person_name, null_if_empty(&address), timestamp, timestamp],
+        ).map_err(|e| e.to_string())?;
         let mut tag_ids = Vec::new();
         for (normalized_name, display_name) in tag_names {
             let tag_id = if let Some(tag) = catalog.get(&normalized_name) {
@@ -3951,6 +4586,16 @@ fn import_sheet_into_book(
     analysis: &SheetAnalysis,
     book_id: &str,
 ) -> Result<SpreadsheetImportResult, String> {
+    let active: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM gift_books WHERE id=? AND deleted_at IS NULL)",
+            params![book_id],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !active {
+        return Err("导入目标礼金簿不存在或已在回收站中".to_string());
+    }
     let (name_index, amount_index) = (
         analysis.name_index.ok_or("缺少姓名列")?,
         analysis.amount_index.ok_or("缺少金额列")?,
@@ -4033,14 +4678,8 @@ fn import_sheet_into_book(
             .into_iter()
             .map(|name| (normalize_tag_name(&name), name))
             .collect::<Vec<_>>();
-        let person: Option<String> = transaction.query_row("SELECT id FROM people WHERE display_name = ? AND COALESCE(address, '') = COALESCE(?, '') AND deleted_at IS NULL LIMIT 1", params![person_name, null_if_empty(&address)], |query| query.get(0)).optional().map_err(|e| e.to_string())?;
-        let person_id = if let Some(id) = person {
-            id
-        } else {
-            let id = Uuid::new_v4().to_string();
-            transaction.execute("INSERT INTO people(id, display_name, address, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", params![id, person_name, null_if_empty(&address), timestamp, timestamp]).map_err(|e| e.to_string())?;
-            id
-        };
+        let person_id = Uuid::new_v4().to_string();
+        transaction.execute("INSERT INTO people(id, display_name, address, created_at, updated_at) VALUES (?, ?, ?, ?, ?)", params![person_id, person_name, null_if_empty(&address), timestamp, timestamp]).map_err(|e| e.to_string())?;
         let mut tag_ids = Vec::new();
         for (normalized_name, display_name) in tag_names {
             let tag_id = if let Some(tag) = catalog.get(&normalized_name) {
@@ -4172,9 +4811,10 @@ fn write_excel_datetime_or_text(
 fn export_book_xlsx(
     book_id: String,
     columns: Option<Vec<String>>,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let connection = active_connection(&state)?;
+    let connection = scoped_read_connection(&state, &vault_path)?;
     let book_title: String = connection
         .query_row(
             "SELECT title FROM gift_books WHERE id = ? AND deleted_at IS NULL",
@@ -4300,7 +4940,10 @@ fn export_book_xlsx(
                 .map_err(|e| e.to_string())?;
             }
         }
-        total_fen += entry.amount_fen;
+        total_fen = total_fen
+            .checked_add(entry.amount_fen)
+            .filter(|total| *total <= MAX_SAFE_FEN)
+            .ok_or("礼金合计超过安全范围，无法准确导出")?;
         count += 1;
     }
     for column in 0..10 {
@@ -4362,12 +5005,12 @@ fn export_book_xlsx(
 }
 
 #[tauri::command]
-fn export_vault(state: State<'_, AppState>) -> Result<String, String> {
+fn export_vault(vault_path: String, state: State<'_, AppState>) -> Result<String, String> {
     let destination =
         choose_file_path("save", "礼金库文件", &["giftvault"], "礼金库导出.giftvault")
             .ok_or_else(|| "已取消导出礼金库".to_string())?;
     let destination = normalize_vault_path(&destination);
-    let source = active_vault_path(&state)?;
+    let source = canonical_opened_vault_path(&state, Some(&vault_path))?;
     let source_canonical = source.canonicalize().unwrap_or(source.clone());
     let destination_canonical = destination
         .canonicalize()
@@ -4378,18 +5021,8 @@ fn export_vault(state: State<'_, AppState>) -> Result<String, String> {
     if destination.exists() {
         return Err("导出目标已存在，请选择其他文件名".to_string());
     }
-    let result = (|| {
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        copy_vault_read_only(&source, &destination)?;
-        validate_vault_file(&destination)?;
-        Ok(destination.to_string_lossy().to_string())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&destination);
-    }
-    result
+    snapshot_vault(&source, &destination)?;
+    Ok(destination.to_string_lossy().to_string())
 }
 
 fn person_tag_map(connection: &Connection) -> Result<HashMap<String, Vec<Tag>>, String> {
@@ -4426,6 +5059,7 @@ fn person_tag_map(connection: &Connection) -> Result<HashMap<String, Vec<Tag>>, 
 }
 
 fn load_entries(connection: &Connection, book_id: Option<&str>) -> Result<Vec<GiftEntry>, String> {
+    ensure_money_totals_safe(connection)?;
     let tag_map = person_tag_map(connection)?;
     let mut statement = connection
         .prepare(
@@ -4448,20 +5082,28 @@ fn load_entries(connection: &Connection, book_id: Option<&str>) -> Result<Vec<Gi
                 person_id,
                 person_name: row.get(3)?,
                 address: row.get(4)?,
-                amount_fen: row.get(5)?,
+                amount_fen: read_money_fen(row, 5)?,
                 payment_method: row.get(6)?,
                 received_at: row.get(7)?,
                 note: row.get(8)?,
                 return_gift: row.get(9)?,
-                return_gift_amount_fen: row.get(10)?,
+                return_gift_amount_fen: read_optional_money_fen(row, 10)?,
                 return_gifted_at: row.get(11)?,
                 tags: person_tags.iter().map(|tag| tag.id.clone()).collect(),
                 tag_names: person_tags.into_iter().map(|tag| tag.name).collect(),
             })
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+    let records = rows
+        .collect::<Result<Vec<GiftEntry>, _>>()
+        .map_err(|e| e.to_string())?;
+    checked_money_total(records.iter().map(|record| record.amount_fen))?;
+    checked_money_total(
+        records
+            .iter()
+            .filter_map(|record| record.return_gift_amount_fen),
+    )?;
+    Ok(records)
 }
 
 fn normalized_search(value: &str) -> String {
@@ -4546,9 +5188,10 @@ fn resolve_opened_search_paths(
 fn list_entries(
     book_id: String,
     search: String,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<GiftEntry>, String> {
-    let connection = active_connection(&state)?;
+    let connection = scoped_read_connection(&state, &vault_path)?;
     let entries = load_entries(&connection, Some(&book_id))?;
     if search.trim().is_empty() {
         return Ok(entries);
@@ -4569,9 +5212,19 @@ fn list_entries(
 }
 
 #[tauri::command]
-fn list_return_gifts(state: State<'_, AppState>) -> Result<Vec<ReturnGiftRecord>, String> {
-    let connection = active_connection(&state)?;
-    let tags_by_person = person_tag_map(&connection)?;
+fn list_return_gifts(
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<ReturnGiftRecord>, String> {
+    let connection = scoped_read_connection(&state, &vault_path)?;
+    list_return_gifts_from_connection(&connection)
+}
+
+fn list_return_gifts_from_connection(
+    connection: &Connection,
+) -> Result<Vec<ReturnGiftRecord>, String> {
+    ensure_money_totals_safe(connection)?;
+    let tags_by_person = person_tag_map(connection)?;
     let mut statement = connection
         .prepare(
             "SELECT e.id, b.id, b.title, p.id, p.display_name, p.address,
@@ -4594,15 +5247,18 @@ fn list_return_gifts(state: State<'_, AppState>) -> Result<Vec<ReturnGiftRecord>
                 person_id: person_id.clone(),
                 person_name: row.get(4)?,
                 address: row.get(5)?,
-                return_gift_amount_fen: row.get(6)?,
-                return_gifted_at: row.get(7)?,
+                return_gift_amount_fen: read_money_fen(row, 6)?,
+                return_gifted_at: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
                 return_gift: row.get(8)?,
                 tags: tags_by_person.get(&person_id).cloned().unwrap_or_default(),
             })
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+    let records = rows
+        .collect::<Result<Vec<ReturnGiftRecord>, _>>()
+        .map_err(|e| e.to_string())?;
+    checked_money_total(records.iter().map(|record| record.return_gift_amount_fen))?;
+    Ok(records)
 }
 
 #[tauri::command]
@@ -4610,13 +5266,14 @@ fn update_return_gift_information(
     entry_id: String,
     amount_fen: i64,
     return_gift: String,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<ReturnGiftRecord, String> {
-    if amount_fen <= 0 {
-        return Err("回礼金额必须大于 0".to_string());
-    }
-    let vault_path = displayable_path(&active_vault_path(&state)?);
-    let mut connection = admin_connection(&state, "update-return-gift-information", false)?;
+    validate_amount(amount_fen)?;
+    let audit_vault_path =
+        displayable_path(&canonical_opened_vault_path(&state, Some(&vault_path))?);
+    let mut connection =
+        admin_connection(&state, &vault_path, "update-return-gift-information", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let snapshot = transaction
         .query_row(
@@ -4641,27 +5298,37 @@ fn update_return_gift_information(
         .optional()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "回礼记录不存在或已被删除".to_string())?;
-    let stored_return_time = snapshot.return_gifted_at.unwrap_or_else(now);
+    if return_gift != snapshot.return_gift.as_deref().unwrap_or_default() {
+        validate_text("回礼备注", &return_gift, 65536)?;
+    }
+    let saved_return_gift = if return_gift == snapshot.return_gift.as_deref().unwrap_or_default() {
+        snapshot.return_gift.clone()
+    } else {
+        null_if_empty(&return_gift)
+    };
+    let stored_return_time = snapshot.return_gifted_at.unwrap_or_default();
     let timestamp = now();
     transaction
         .execute(
-            "UPDATE gift_entries SET return_gift_amount_fen = ?, return_gift = ?, return_gifted_at = COALESCE(return_gifted_at, ?), updated_at = ? WHERE id = ? AND deleted_at IS NULL",
-            params![amount_fen, null_if_empty(&return_gift), stored_return_time, timestamp, entry_id],
+            "UPDATE gift_entries SET return_gift_amount_fen = ?, return_gift = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+            params![amount_fen, saved_return_gift, timestamp, entry_id],
         )
         .map_err(|e| e.to_string())?;
     let mut changes = Vec::new();
     if snapshot.previous_amount != amount_fen {
-        changes.push(audit_change(
+        changes.push(machine_change(
             "回礼金额",
-            format_money_fen(snapshot.previous_amount),
-            format_money_fen(amount_fen),
+            "return_gift_amount_fen",
+            snapshot.previous_amount,
+            amount_fen,
         ));
     }
-    if snapshot.return_gift.as_deref() != null_if_empty(&return_gift).as_deref() {
-        changes.push(audit_change(
+    if snapshot.return_gift != saved_return_gift {
+        changes.push(machine_change(
             "回礼备注",
-            audit_text(snapshot.return_gift.as_deref()),
-            audit_text(null_if_empty(&return_gift).as_deref()),
+            "return_gift",
+            &snapshot.return_gift,
+            &saved_return_gift,
         ));
     }
     if !changes.is_empty() {
@@ -4679,7 +5346,7 @@ fn update_return_gift_information(
             Some(AuditContext {
                 person_id: snapshot.person_id.clone(),
                 vault_id: audit_vault_id(&transaction)?,
-                vault_path,
+                vault_path: audit_vault_path,
                 book_id: Some(snapshot.book_id.clone()),
                 book_ids: vec![snapshot.book_id.clone()],
                 book_titles: vec![snapshot.book_title.clone()],
@@ -4700,7 +5367,7 @@ fn update_return_gift_information(
         address: snapshot.address,
         return_gift_amount_fen: amount_fen,
         return_gifted_at: stored_return_time,
-        return_gift: null_if_empty(&return_gift),
+        return_gift: saved_return_gift,
         tags,
     })
 }
@@ -4709,8 +5376,10 @@ fn update_return_gift_information(
 fn search_vault(
     query: String,
     vault_paths: Vec<String>,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<SearchResponse, String> {
+    let active_path = canonical_opened_vault_path(&state, Some(&vault_path))?;
     if query.trim().is_empty() {
         return Ok(SearchResponse {
             results: Vec::new(),
@@ -4719,7 +5388,6 @@ fn search_vault(
             searched_vaults: Vec::new(),
         });
     }
-    let active_path = active_vault_path(&state)?;
     let opened_paths = opened_vault_paths(&state)?;
     let requested_paths = resolve_opened_search_paths(&vault_paths, &opened_paths, &active_path);
     let mut hits = Vec::new();
@@ -4775,7 +5443,11 @@ fn search_vault(
 }
 
 #[tauri::command]
-fn create_entry(input: CreateEntryInput, state: State<'_, AppState>) -> Result<GiftEntry, String> {
+fn create_entry(
+    input: CreateEntryInput,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<GiftEntry, String> {
     let CreateEntryInput {
         book_id,
         person_name,
@@ -4791,13 +5463,21 @@ fn create_entry(input: CreateEntryInput, state: State<'_, AppState>) -> Result<G
     if person_name.trim().is_empty() {
         return Err("姓名不能为空".to_string());
     }
-    if amount_fen <= 0 {
-        return Err("金额必须大于 0".to_string());
+    validate_amount(amount_fen)?;
+    if let Some(amount) = return_gift_amount_fen {
+        validate_amount(amount)?;
     }
-    if return_gift_amount_fen.is_some_and(|amount| amount <= 0) {
-        return Err("回礼金额必须大于 0".to_string());
+    for (label, value, maximum) in [
+        ("姓名", &person_name, 256),
+        ("地址", &address, 4096),
+        ("支付方式", &payment_method, 256),
+        ("备注", &note, 65536),
+        ("回礼备注", &return_gift, 65536),
+    ] {
+        validate_text(label, value, maximum)?;
     }
-    let mut connection = admin_connection(&state, "create-entry", false)?;
+    validate_date(&received_at, true)?;
+    let mut connection = admin_connection(&state, &vault_path, "create-entry", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let book_exists: Option<String> = transaction
         .query_row(
@@ -4840,7 +5520,21 @@ fn create_entry(input: CreateEntryInput, state: State<'_, AppState>) -> Result<G
 }
 
 #[tauri::command]
-fn update_entry(input: UpdateEntryInput, state: State<'_, AppState>) -> Result<GiftEntry, String> {
+fn update_entry(
+    input: UpdateEntryInput,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<GiftEntry, String> {
+    let path = canonical_opened_vault_path(&state, Some(&vault_path))?;
+    let mut connection = admin_connection(&state, &vault_path, "update-entry", false)?;
+    update_entry_record(input, &mut connection, &displayable_path(&path))
+}
+
+fn update_entry_record(
+    input: UpdateEntryInput,
+    connection: &mut Connection,
+    vault_path: &str,
+) -> Result<GiftEntry, String> {
     let UpdateEntryInput {
         entry_id,
         person_name,
@@ -4856,16 +5550,72 @@ fn update_entry(input: UpdateEntryInput, state: State<'_, AppState>) -> Result<G
     if person_name.trim().is_empty() {
         return Err("姓名不能为空".to_string());
     }
-    if amount_fen <= 0 {
-        return Err("金额必须大于 0".to_string());
+    validate_amount(amount_fen)?;
+    if let Some(amount) = return_gift_amount_fen {
+        validate_amount(amount)?;
     }
-    if return_gift_amount_fen.is_some_and(|amount| amount <= 0) {
-        return Err("回礼金额必须大于 0".to_string());
-    }
-    let vault_path = displayable_path(&active_vault_path(&state)?);
-    let mut connection = admin_connection(&state, "update-entry", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let audit_before = entry_audit_snapshot(&transaction, &entry_id)?;
+    for (label, value, previous, maximum) in [
+        (
+            "姓名",
+            person_name.as_str(),
+            audit_before.person_name.as_str(),
+            256,
+        ),
+        (
+            "地址",
+            address.as_str(),
+            audit_before.address.as_deref().unwrap_or_default(),
+            4096,
+        ),
+        (
+            "支付方式",
+            payment_method.as_str(),
+            audit_before.payment_method.as_str(),
+            256,
+        ),
+        (
+            "备注",
+            note.as_str(),
+            audit_before.note.as_deref().unwrap_or_default(),
+            65536,
+        ),
+        (
+            "回礼备注",
+            return_gift.as_str(),
+            audit_before.return_gift.as_deref().unwrap_or_default(),
+            65536,
+        ),
+    ] {
+        if value != previous {
+            validate_text(label, value, maximum)?;
+        }
+    }
+    if received_at != audit_before.received_at {
+        validate_date(&received_at, true)?;
+    }
+    let saved_note = if note == audit_before.note.as_deref().unwrap_or_default() {
+        audit_before.note.clone()
+    } else {
+        null_if_empty(&note)
+    };
+    let saved_return_gift =
+        if return_gift == audit_before.return_gift.as_deref().unwrap_or_default() {
+            audit_before.return_gift.clone()
+        } else {
+            null_if_empty(&return_gift)
+        };
+    let saved_payment = if payment_method == audit_before.payment_method {
+        payment_method.clone()
+    } else {
+        payment_method.trim().to_string()
+    };
+    let saved_name = if person_name == audit_before.person_name {
+        person_name.clone()
+    } else {
+        person_name.trim().to_string()
+    };
     let (book_id, current_person_id, current_person_name, current_person_address, existing_return_gifted_at): (String, String, String, Option<String>, Option<String>) = transaction
         .query_row(
             "SELECT e.book_id, e.person_id, p.display_name, p.address, e.return_gifted_at
@@ -4880,8 +5630,12 @@ fn update_entry(input: UpdateEntryInput, state: State<'_, AppState>) -> Result<G
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "礼金记录不存在或已在回收站中".to_string())?;
 
-    let requested_address = null_if_empty(&address);
-    let same_person = current_person_name == person_name.trim()
+    let requested_address = if address == current_person_address.as_deref().unwrap_or_default() {
+        current_person_address.clone()
+    } else {
+        null_if_empty(&address)
+    };
+    let same_person = current_person_name == saved_name
         && current_person_address.as_deref() == requested_address.as_deref();
     let (person_id, saved_address) = if same_person {
         (current_person_id, current_person_address)
@@ -4891,16 +5645,31 @@ fn update_entry(input: UpdateEntryInput, state: State<'_, AppState>) -> Result<G
         transaction
             .execute(
                 "INSERT INTO people(id, display_name, address, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                params![id, person_name.trim(), requested_address, timestamp, timestamp],
+                params![id, saved_name, requested_address, timestamp, timestamp],
             )
             .map_err(|e| e.to_string())?;
-        (id, null_if_empty(&address))
+        (id, requested_address)
     };
     let timestamp = now();
-    let received_at = received_at_or_now(&received_at);
-    let return_gifted_at = return_gift_amount_fen
-        .map(|_| existing_return_gifted_at.unwrap_or_else(|| timestamp.clone()));
+    let received_at = if received_at == audit_before.received_at {
+        received_at
+    } else {
+        normalize_imported_received_at(&received_at)
+    };
+    let return_gifted_at = if return_gift_amount_fen.is_none() {
+        None
+    } else if audit_before.return_gift_amount_fen.is_some() {
+        existing_return_gifted_at
+    } else {
+        Some(timestamp.clone())
+    };
     let tag_snapshot = serde_json::to_string(&tag_ids).map_err(|e| e.to_string())?;
+    transaction
+        .execute(
+            "DELETE FROM person_tags WHERE person_id=?",
+            params![person_id],
+        )
+        .map_err(|e| e.to_string())?;
     apply_entry_tags(&transaction, &person_id, &tag_ids)?;
     transaction
         .execute(
@@ -4908,10 +5677,10 @@ fn update_entry(input: UpdateEntryInput, state: State<'_, AppState>) -> Result<G
             params![
                 person_id,
                 amount_fen,
-                payment_method.trim(),
-                received_at.trim(),
-                null_if_empty(&note),
-                null_if_empty(&return_gift),
+                saved_payment,
+                received_at,
+                saved_note,
+                saved_return_gift,
                 return_gift_amount_fen,
                 return_gifted_at,
                 tag_snapshot,
@@ -4937,7 +5706,7 @@ fn update_entry(input: UpdateEntryInput, state: State<'_, AppState>) -> Result<G
             Some(AuditContext {
                 person_id: person_id.clone(),
                 vault_id: audit_vault_id(&transaction)?,
-                vault_path,
+                vault_path: vault_path.to_string(),
                 book_id: Some(book_id.clone()),
                 book_ids: vec![book_id.clone()],
                 book_titles: vec![audit_after.book_title.clone()],
@@ -4949,13 +5718,13 @@ fn update_entry(input: UpdateEntryInput, state: State<'_, AppState>) -> Result<G
         id: entry_id,
         book_id,
         person_id,
-        person_name: person_name.trim().to_string(),
+        person_name: saved_name,
         address: saved_address,
         amount_fen,
-        payment_method: payment_method.trim().to_string(),
+        payment_method: saved_payment,
         received_at,
-        note: null_if_empty(&note),
-        return_gift: null_if_empty(&return_gift),
+        note: saved_note,
+        return_gift: saved_return_gift,
         return_gift_amount_fen,
         return_gifted_at,
         tags: tag_ids,
@@ -4964,12 +5733,19 @@ fn update_entry(input: UpdateEntryInput, state: State<'_, AppState>) -> Result<G
 }
 
 #[tauri::command]
-fn delete_entry(entry_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let mut connection = admin_connection(&state, "delete-entry", false)?;
+fn delete_entry(
+    entry_id: String,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut connection = admin_connection(&state, &vault_path, "delete-entry", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let snapshot = entry_audit_snapshot(&transaction, &entry_id)?;
     let timestamp = now();
-    transaction.execute("UPDATE gift_entries SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL", params![timestamp, timestamp, entry_id]).map_err(|e| e.to_string())?;
+    let changed = transaction.execute("UPDATE gift_entries SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL", params![timestamp, timestamp, entry_id]).map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("礼金记录不存在或已在回收站中".to_string());
+    }
     write_audit_detail(
         &transaction,
         "delete",
@@ -4986,16 +5762,24 @@ fn delete_entry(entry_id: String, state: State<'_, AppState>) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn restore_entry(entry_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let mut connection = admin_connection(&state, "restore-entry", false)?;
+fn restore_entry(
+    entry_id: String,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut connection = admin_connection(&state, &vault_path, "restore-entry", false)?;
     restore_entry_record(&mut connection, &entry_id)
 }
 
 fn restore_entry_record(connection: &mut Connection, entry_id: &str) -> Result<(), String> {
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
+    ensure_entry_parents_active(&transaction, entry_id)?;
     let snapshot = entry_audit_snapshot(&transaction, entry_id)?;
     let timestamp = now();
-    transaction.execute("UPDATE gift_entries SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL", params![timestamp, entry_id]).map_err(|e| e.to_string())?;
+    let changed = transaction.execute("UPDATE gift_entries SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL", params![timestamp, entry_id]).map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("礼金记录不存在或未在回收站中".to_string());
+    }
     write_audit_detail(
         &transaction,
         "restore",
@@ -5011,9 +5795,41 @@ fn restore_entry_record(connection: &mut Connection, entry_id: &str) -> Result<(
     transaction.commit().map_err(|e| e.to_string())
 }
 
+fn ensure_entry_parents_active(connection: &Connection, entry_id: &str) -> Result<(), String> {
+    let active: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM gift_entries e JOIN people p ON p.id=e.person_id JOIN gift_books b ON b.id=e.book_id WHERE e.id=? AND p.deleted_at IS NULL AND b.deleted_at IS NULL)",
+        params![entry_id], |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+    if !active {
+        return Err("请先从回收站恢复所属人物和礼金簿，再恢复礼金记录".to_string());
+    }
+    Ok(())
+}
+
+fn ensure_person_restore_books_active(
+    connection: &Connection,
+    person_id: &str,
+    deleted_at: &str,
+) -> Result<(), String> {
+    let deleted: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM gift_entries e JOIN gift_books b ON b.id=e.book_id WHERE e.person_id=? AND e.deleted_at=? AND b.deleted_at IS NOT NULL)",
+        params![person_id,deleted_at], |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+    if deleted {
+        return Err("请先恢复人物所属的已删除礼金簿，再批量恢复人物及其记录".to_string());
+    }
+    Ok(())
+}
+
 #[tauri::command]
-fn delete_person(person_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let mut connection = admin_connection(&state, "delete-person", true)?;
+fn delete_person(
+    person_id: String,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let audit_vault_path =
+        displayable_path(&canonical_opened_vault_path(&state, Some(&vault_path))?);
+    let mut connection = admin_connection(&state, &vault_path, "delete-person", true)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let person_name: String = transaction
         .query_row(
@@ -5060,7 +5876,7 @@ fn delete_person(person_id: String, state: State<'_, AppState>) -> Result<(), St
         Some(AuditContext {
             person_id: person_id.clone(),
             vault_id: audit_vault_id(&transaction)?,
-            vault_path: displayable_path(&active_vault_path(&state)?),
+            vault_path: audit_vault_path,
             book_id: book_ids.first().cloned(),
             book_ids,
             book_titles,
@@ -5080,6 +5896,7 @@ fn restore_person_record(connection: &mut Connection, person_id: &str) -> Result
         .optional()
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "人物不存在或不在回收站中".to_string())?;
+    ensure_person_restore_books_active(&transaction, person_id, &deleted_at)?;
     let timestamp = now();
     transaction
         .execute(
@@ -5109,8 +5926,12 @@ fn restore_person_record(connection: &mut Connection, person_id: &str) -> Result
 }
 
 #[tauri::command]
-fn restore_person(person_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let mut connection = admin_connection(&state, "restore-person", false)?;
+fn restore_person(
+    person_id: String,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut connection = admin_connection(&state, &vault_path, "restore-person", false)?;
     restore_person_record(&mut connection, &person_id)
 }
 
@@ -5232,9 +6053,15 @@ fn list_trash(state: State<'_, AppState>) -> Result<Vec<TrashItem>, String> {
 }
 
 #[tauri::command]
-fn list_audit_logs(state: State<'_, AppState>) -> Result<Vec<AuditLog>, String> {
-    let can_clean_stale = is_admin_session(&state)? && !is_edit_locked(&state)?;
-    let connection = active_connection(&state)?;
+fn list_audit_logs(
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<AuditLog>, String> {
+    let connection = scoped_read_connection(&state, &vault_path)?;
+    list_audit_logs_from_connection(&connection)
+}
+
+fn list_audit_logs_from_connection(connection: &Connection) -> Result<Vec<AuditLog>, String> {
     let mut statement = connection
         .prepare(
             "SELECT id, action, entity_type, entity_id, payload, created_at
@@ -5243,7 +6070,7 @@ fn list_audit_logs(state: State<'_, AppState>) -> Result<Vec<AuditLog>, String> 
                  OR (entity_type = 'person' AND action IN ('update', 'delete', 'restore'))
                  OR (entity_type = 'gift_book' AND action IN ('update', 'delete', 'restore'))
                  OR (entity_type = 'vault' AND action = 'update'))
-             ORDER BY created_at DESC",
+             ORDER BY created_at DESC, rowid DESC",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement
@@ -5291,7 +6118,7 @@ fn list_audit_logs(state: State<'_, AppState>) -> Result<Vec<AuditLog>, String> 
             if let Some(titles) = contextual_titles {
                 payload.book_title = Some(titles.join("、"));
             } else if payload.book_title.is_none() {
-                payload.book_title = Some(audit_person_book_titles(&connection, &entity_id)?);
+                payload.book_title = Some(audit_person_book_titles(connection, &entity_id)?);
             }
         }
         logs.push(AuditLog {
@@ -5304,23 +6131,51 @@ fn list_audit_logs(state: State<'_, AppState>) -> Result<Vec<AuditLog>, String> 
             description: payload.description,
             changes: payload.changes,
             created_at,
+            reversible: false,
+            reversible_reason: None,
         });
     }
-    let stale_ids = logs
-        .iter()
-        .filter(|record| !audit_record_is_reversible(&connection, record))
-        .map(|record| record.id.clone())
-        .collect::<Vec<_>>();
-    if can_clean_stale && !stale_ids.is_empty() {
-        delete_audit_logs(&connection, &stale_ids)?;
-        logs.retain(|record| !stale_ids.contains(&record.id));
+    for record in &mut logs {
+        record.reversible = audit_record_is_reversible(connection, record);
+        if !record.reversible {
+            record.reversible_reason =
+                Some("目标已删除、缺少依赖或旧快照存在歧义，历史记录已保留".to_string());
+        }
     }
     Ok(logs)
 }
 
 fn audit_record_is_reversible(connection: &Connection, record: &AuditLog) -> bool {
+    if (record.entity_type == "gift_entry" || record.entity_type == "return_gift")
+        && record.action != "restore"
+        && ensure_entry_parents_active(connection, &record.entity_id).is_err()
+    {
+        return false;
+    }
+    if record.action == "delete" && record.entity_type == "person" {
+        let deleted_at = connection
+            .query_row(
+                "SELECT deleted_at FROM people WHERE id=?",
+                params![record.entity_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten();
+        if deleted_at.as_deref().is_none_or(|value| {
+            ensure_person_restore_books_active(connection, &record.entity_id, value).is_err()
+        }) {
+            return false;
+        }
+    }
     if record.action == "update" {
         if record.changes.is_empty() {
+            return false;
+        }
+        if !record
+            .changes
+            .iter()
+            .all(|change| audit_change_is_reversible(connection, record, change))
+        {
             return false;
         }
         let query = match record.entity_type.as_str() {
@@ -5368,6 +6223,111 @@ fn audit_record_is_reversible(connection: &Connection, record: &AuditLog) -> boo
         .unwrap_or(false)
 }
 
+fn audit_change_is_reversible(
+    connection: &Connection,
+    record: &AuditLog,
+    change: &AuditChange,
+) -> bool {
+    let entry = matches!(record.entity_type.as_str(), "gift_entry" | "return_gift");
+    if let Some(machine) = &change.machine {
+        if machine.version != 1 {
+            return false;
+        }
+        let supported = match record.entity_type.as_str() {
+            "gift_entry" | "return_gift" => matches!(
+                machine.field_id.as_str(),
+                "person_id"
+                    | "person_name"
+                    | "address"
+                    | "amount_fen"
+                    | "payment_method"
+                    | "received_at"
+                    | "note"
+                    | "return_gift"
+                    | "return_gift_amount_fen"
+                    | "return_gifted_at"
+                    | "tag_ids"
+            ),
+            "gift_book" => matches!(
+                machine.field_id.as_str(),
+                "title" | "occasion" | "event_date" | "location" | "notes"
+            ),
+            "vault" => matches!(machine.field_id.as_str(), "name" | "notes"),
+            "person" => machine.field_id == "tag_ids",
+            _ => false,
+        };
+        if !supported {
+            return false;
+        }
+        if machine.field_id == "tag_ids" {
+            let Ok(ids) = serde_json::from_value::<Vec<String>>(machine.before.clone()) else {
+                return false;
+            };
+            return ids.iter().all(|id| {
+                connection
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM tags WHERE id=? AND deleted_at IS NULL)",
+                        params![id],
+                        |row| row.get::<_, bool>(0),
+                    )
+                    .unwrap_or(false)
+            });
+        }
+        if machine.field_id == "person_id" {
+            let (Some(before), Some(after)) = (machine.before.as_str(), machine.after.as_str())
+            else {
+                return false;
+            };
+            return connection.query_row("SELECT EXISTS(SELECT 1 FROM gift_entries e JOIN people p ON p.id=? AND p.deleted_at IS NULL WHERE e.id=? AND e.person_id=? AND e.deleted_at IS NULL)",params![before,record.entity_id,after],|row|row.get::<_,bool>(0)).unwrap_or(false);
+        }
+        if entry && matches!(machine.field_id.as_str(), "person_name" | "address") {
+            return record.changes.iter().any(|item| {
+                item.machine
+                    .as_ref()
+                    .is_some_and(|value| value.field_id == "person_id")
+            });
+        }
+        if matches!(
+            machine.field_id.as_str(),
+            "amount_fen" | "return_gift_amount_fen"
+        ) {
+            return (machine.field_id == "return_gift_amount_fen" && machine.before.is_null())
+                || machine
+                    .before
+                    .as_i64()
+                    .is_some_and(|amount| validate_amount(amount).is_ok());
+        }
+        return machine.before.is_null() || machine.before.is_string();
+    }
+    if matches!(change.before.as_str(), "未填写" | "未设置") {
+        return false;
+    }
+    match (record.entity_type.as_str(), change.field.as_str()) {
+        ("gift_entry" | "return_gift", "金额" | "回礼金额") => {
+            parse_amount_fen(&change.before).is_some_and(|value| value > 0)
+        }
+        ("gift_entry" | "return_gift", "支付方式" | "登记日期" | "备注" | "回礼备注") => {
+            true
+        }
+        ("gift_entry" | "return_gift" | "person", "人物标签") => {
+            !change.before.contains('、')
+                && (change.before.is_empty()
+                    || connection
+                        .query_row(
+                            "SELECT EXISTS(SELECT 1 FROM tags WHERE name=? AND deleted_at IS NULL)",
+                            params![change.before],
+                            |row| row.get::<_, bool>(0),
+                        )
+                        .unwrap_or(false))
+        }
+        ("gift_book", "礼金簿名称" | "活动类型" | "活动日期" | "地点" | "备注") => {
+            true
+        }
+        ("vault", "礼金库名称" | "礼金库备注") => true,
+        _ => false,
+    }
+}
+
 #[tauri::command]
 fn delete_audit_logs(connection: &Connection, ids: &[String]) -> Result<usize, String> {
     let scope = "((entity_type IN ('gift_entry', 'return_gift') AND action IN ('update', 'delete', 'restore'))
@@ -5394,13 +6354,16 @@ fn restore_person_tag_names(
     person_id: &str,
     value: &str,
 ) -> Result<(), String> {
+    if value.contains('、') {
+        return Err("旧标签快照使用分隔符，无法区分组合名称与多个标签，未执行恢复".to_string());
+    }
     transaction
         .execute(
             "DELETE FROM person_tags WHERE person_id = ?",
             params![person_id],
         )
         .map_err(|e| e.to_string())?;
-    if value.contains("未设置") || value.contains("未填写") || value.trim().is_empty() {
+    if matches!(value, "未设置" | "未填写") || value.trim().is_empty() {
         return Ok(());
     }
     for name in value
@@ -5435,6 +6398,7 @@ fn restore_deleted_audit_entity(
     let timestamp = now();
     match entity_type {
         "gift_entry" => {
+            ensure_entry_parents_active(transaction, entity_id)?;
             let changed = transaction
                 .execute(
                     "UPDATE gift_entries SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL",
@@ -5455,6 +6419,7 @@ fn restore_deleted_audit_entity(
                 .optional()
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| "人物不在回收站中，无法通过历史改动恢复".to_string())?;
+            ensure_person_restore_books_active(transaction, entity_id, &deleted_at)?;
             transaction
                 .execute(
                     "UPDATE people SET deleted_at = NULL, updated_at = ? WHERE id = ?",
@@ -5528,8 +6493,37 @@ fn restore_audit_record(
         return Err("该历史记录没有保存可逆的字段快照，无法恢复".to_string());
     }
     let entry_entity = entity_type == "gift_entry" || entity_type == "return_gift";
+    if entry_entity {
+        ensure_entry_parents_active(transaction, entity_id)?;
+    }
+    if entry_entity
+        && payload.changes.iter().any(|change| {
+            change
+                .machine
+                .as_ref()
+                .is_some_and(|value| matches!(value.field_id.as_str(), "person_name" | "address"))
+        })
+        && !payload.changes.iter().any(|change| {
+            change
+                .machine
+                .as_ref()
+                .is_some_and(|value| value.field_id == "person_id")
+        })
+    {
+        return Err("历史缺少原人物关联，无法安全恢复姓名或地址".to_string());
+    }
     for change in &payload.changes {
+        if let Some(machine) = &change.machine {
+            restore_machine_change(transaction, entity_type, entity_id, machine)?;
+            continue;
+        }
         let field = change.field.as_str();
+        if matches!(change.before.as_str(), "未填写" | "未设置") {
+            return Err("旧历史中的占位文本无法区分空值与真实文字，未执行恢复".to_string());
+        }
+        if entry_entity && matches!(field, "姓名" | "地址") {
+            return Err("旧历史未保存稳定人物身份，无法安全恢复姓名或地址".to_string());
+        }
         if entity_type == "person" && field.contains("标签") {
             restore_person_tag_names(transaction, entity_id, &change.before)?;
         } else if entity_type == "vault" && field.contains("名称") {
@@ -5543,7 +6537,7 @@ fn restore_audit_record(
             transaction
                 .execute(
                     "INSERT OR REPLACE INTO vault_meta(key, value) VALUES ('notes', ?)",
-                    params![if change.before.contains("未填写") {
+                    params![if change.before == "未填写" {
                         ""
                     } else {
                         &change.before
@@ -5551,7 +6545,7 @@ fn restore_audit_record(
                 )
                 .map_err(|e| e.to_string())?;
         } else if entry_entity && field.contains("回礼金额") {
-            let amount = if change.before.contains("未填写") {
+            let amount = if change.before == "未填写" {
                 None
             } else {
                 Some(
@@ -5569,7 +6563,7 @@ fn restore_audit_record(
             transaction
                 .execute(
                     "UPDATE gift_entries SET return_gift = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
-                    params![if change.before.contains("未填写") { None } else { Some(change.before.clone()) }, now(), entity_id],
+                    params![if change.before == "未填写" { None } else { Some(change.before.clone()) }, now(), entity_id],
                 )
                 .map_err(|e| e.to_string())?;
         } else if entry_entity && field.contains("金额") {
@@ -5599,7 +6593,7 @@ fn restore_audit_record(
             transaction
                 .execute(
                     "UPDATE gift_entries SET note = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
-                    params![if change.before.contains("未填写") { None } else { Some(change.before.clone()) }, now(), entity_id],
+                    params![if change.before == "未填写" { None } else { Some(change.before.clone()) }, now(), entity_id],
                 )
                 .map_err(|e| e.to_string())?;
         } else if entry_entity && field.contains("人物标签") {
@@ -5622,7 +6616,7 @@ fn restore_audit_record(
             transaction
                 .execute(
                     "UPDATE people SET address = ?, updated_at = ? WHERE id = (SELECT person_id FROM gift_entries WHERE id = ?)",
-                    params![if change.before.contains("未填写") { None } else { Some(change.before.clone()) }, now(), entity_id],
+                    params![if change.before == "未填写" { None } else { Some(change.before.clone()) }, now(), entity_id],
                 )
                 .map_err(|e| e.to_string())?;
         } else if entity_type == "gift_book" && field == "礼金簿名称" {
@@ -5643,25 +6637,148 @@ fn restore_audit_record(
             transaction
                 .execute(
                     "UPDATE gift_books SET event_date = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
-                    params![if change.before.contains("未设置") { None } else { Some(change.before.clone()) }, now(), entity_id],
+                    params![if matches!(change.before.as_str(), "未设置" | "未填写") { None } else { Some(change.before.clone()) }, now(), entity_id],
                 )
                 .map_err(|e| e.to_string())?;
         } else if entity_type == "gift_book" && field == "地点" {
             transaction
                 .execute(
                     "UPDATE gift_books SET location = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
-                    params![if change.before.contains("未设置") { None } else { Some(change.before.clone()) }, now(), entity_id],
+                    params![if matches!(change.before.as_str(), "未设置" | "未填写") { None } else { Some(change.before.clone()) }, now(), entity_id],
                 )
                 .map_err(|e| e.to_string())?;
         } else if entity_type == "gift_book" && field == "备注" {
             transaction
                 .execute(
                     "UPDATE gift_books SET notes = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
-                    params![if change.before.contains("未设置") { None } else { Some(change.before.clone()) }, now(), entity_id],
+                    params![if matches!(change.before.as_str(), "未设置" | "未填写") { None } else { Some(change.before.clone()) }, now(), entity_id],
                 )
                 .map_err(|e| e.to_string())?;
         } else {
             return Err(format!("历史字段“{}”没有安全的恢复映射", field));
+        }
+    }
+    Ok(())
+}
+
+fn restore_machine_change(
+    transaction: &Transaction<'_>,
+    entity_type: &str,
+    entity_id: &str,
+    change: &AuditMachineChange,
+) -> Result<(), String> {
+    if change.version != 1 {
+        return Err("不支持该历史快照版本".to_string());
+    }
+    let entry = matches!(entity_type, "gift_entry" | "return_gift");
+    if change.field_id == "tag_ids" {
+        let person_id = if entity_type == "person" {
+            entity_id.to_string()
+        } else if entry {
+            transaction
+                .query_row(
+                    "SELECT person_id FROM gift_entries WHERE id=? AND deleted_at IS NULL",
+                    params![entity_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|e| e.to_string())?
+        } else {
+            return Err("标签快照实体无效".to_string());
+        };
+        let ids: Vec<String> =
+            serde_json::from_value(change.before.clone()).map_err(|e| e.to_string())?;
+        transaction
+            .execute(
+                "DELETE FROM person_tags WHERE person_id=?",
+                params![person_id],
+            )
+            .map_err(|e| e.to_string())?;
+        return apply_entry_tags(transaction, &person_id, &ids);
+    }
+    if entry && change.field_id == "person_id" {
+        let before = change.before.as_str().ok_or("历史人物身份无效")?;
+        let after = change.after.as_str().ok_or("历史人物身份无效")?;
+        let current: String = transaction
+            .query_row(
+                "SELECT person_id FROM gift_entries WHERE id=? AND deleted_at IS NULL",
+                params![entity_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let active: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM people WHERE id=? AND deleted_at IS NULL)",
+                params![before],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if current != after || !active {
+            return Err("人物关联已改变或原人物已删除，未执行历史恢复".to_string());
+        }
+        transaction
+            .execute(
+                "UPDATE gift_entries SET person_id=?, updated_at=? WHERE id=?",
+                params![before, now(), entity_id],
+            )
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+    // Name/address display changes are backed by the preceding identity change;
+    // relinking the entry must never mutate a person shared by another entry.
+    if entry && matches!(change.field_id.as_str(), "person_name" | "address") {
+        return Ok(());
+    }
+    let column = match (entity_type, change.field_id.as_str()) {
+        (
+            "gift_entry" | "return_gift",
+            "amount_fen"
+            | "payment_method"
+            | "received_at"
+            | "note"
+            | "return_gift"
+            | "return_gift_amount_fen"
+            | "return_gifted_at",
+        ) => change.field_id.as_str(),
+        ("gift_book", "title" | "occasion" | "event_date" | "location" | "notes") => {
+            change.field_id.as_str()
+        }
+        ("vault", "name" | "notes") => change.field_id.as_str(),
+        _ => return Err(format!("历史字段 {} 没有安全的恢复映射", change.field_id)),
+    };
+    if matches!(column, "amount_fen" | "return_gift_amount_fen") {
+        if !(column == "return_gift_amount_fen" && change.before.is_null()) {
+            validate_amount(change.before.as_i64().ok_or("历史金额不是整数分")?)?;
+        }
+    } else if !change.before.is_null() && !change.before.is_string() {
+        return Err("历史文本字段类型无效".to_string());
+    }
+    let value = match &change.before {
+        serde_json::Value::Null => rusqlite::types::Value::Null,
+        serde_json::Value::String(value) => rusqlite::types::Value::Text(value.clone()),
+        serde_json::Value::Number(value) => {
+            rusqlite::types::Value::Integer(value.as_i64().ok_or("历史金额不是整数分")?)
+        }
+        _ => return Err("历史字段类型无效".to_string()),
+    };
+    if entity_type == "vault" {
+        transaction
+            .execute(
+                "INSERT OR REPLACE INTO vault_meta(key,value) VALUES (?,?)",
+                params![column, value],
+            )
+            .map_err(|e| e.to_string())?;
+    } else {
+        let table = if entry { "gift_entries" } else { "gift_books" };
+        let changed = transaction
+            .execute(
+                &format!(
+                    "UPDATE {table} SET {column}=?, updated_at=? WHERE id=? AND deleted_at IS NULL"
+                ),
+                params![value, now(), entity_id],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err("历史恢复目标已不存在或在回收站中".to_string());
         }
     }
     Ok(())
@@ -5696,11 +6813,15 @@ fn audit_restore_rows(
 }
 
 #[tauri::command]
-fn restore_audit_logs(ids: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
+fn restore_audit_logs(
+    ids: Vec<String>,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     if ids.is_empty() {
         return Err("请先进入多选并选择要恢复的历史改动".to_string());
     }
-    let mut connection = admin_connection(&state, "restore-audit-logs", false)?;
+    let mut connection = admin_connection(&state, &vault_path, "restore-audit-logs", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let rows = audit_restore_rows(&transaction, &ids)?;
     if rows.len() != ids.len() {
@@ -5740,8 +6861,12 @@ fn restore_audit_logs(ids: Vec<String>, state: State<'_, AppState>) -> Result<()
 }
 
 #[tauri::command]
-fn clear_audit_logs(ids: Option<Vec<String>>, state: State<'_, AppState>) -> Result<(), String> {
-    let connection = admin_connection(&state, "clear-audit-logs", false)?;
+fn clear_audit_logs(
+    ids: Option<Vec<String>>,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let connection = admin_connection(&state, &vault_path, "clear-audit-logs", false)?;
     delete_audit_logs(&connection, &ids.unwrap_or_default())?;
     Ok(())
 }
@@ -5755,9 +6880,13 @@ fn restore_trash_item(
 ) -> Result<(), String> {
     match kind.as_str() {
         "book" | "entry" | "tag" | "person" => {
+            let requested_path = vault_path
+                .as_deref()
+                .filter(|path| !path.trim().is_empty())
+                .ok_or("请选择回收站记录所属的礼金库")?;
             let mut connection = admin_connection_for_path(
                 &state,
-                vault_path.as_deref(),
+                Some(requested_path),
                 "restore-trash-item",
                 false,
             )?;
@@ -5827,8 +6956,8 @@ fn empty_trash(pin: String, state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn list_tags(state: State<'_, AppState>) -> Result<Vec<Tag>, String> {
-    let connection = active_connection(&state)?;
+fn list_tags(vault_path: String, state: State<'_, AppState>) -> Result<Vec<Tag>, String> {
+    let connection = scoped_read_connection(&state, &vault_path)?;
     let mut statement = connection
         .prepare(
             "SELECT t.id, t.name, t.color
@@ -5870,7 +6999,13 @@ fn normalize_tag_color(color: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn create_tag(name: String, color: String, state: State<'_, AppState>) -> Result<Tag, String> {
+fn create_tag(
+    name: String,
+    color: String,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<Tag, String> {
+    validate_text("标签名称", &name, 256)?;
     let name = name.trim().to_string();
     if name.is_empty() {
         return Err("标签名称不能为空".to_string());
@@ -5880,7 +7015,7 @@ fn create_tag(name: String, color: String, state: State<'_, AppState>) -> Result
     } else {
         normalize_tag_color(&color)?
     };
-    let mut connection = admin_connection(&state, "create-tag", false)?;
+    let mut connection = admin_connection(&state, &vault_path, "create-tag", false)?;
     let normalized = normalize_tag_name(&name);
     let existing = {
         let mut existing_statement = connection
@@ -5936,8 +7071,12 @@ fn create_tag(name: String, color: String, state: State<'_, AppState>) -> Result
 }
 
 #[tauri::command]
-fn delete_tag(tag_id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let mut connection = admin_connection(&state, "delete-tag", true)?;
+fn delete_tag(
+    tag_id: String,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut connection = admin_connection(&state, &vault_path, "delete-tag", true)?;
     delete_tag_record(&mut connection, &tag_id)
 }
 
@@ -6012,10 +7151,11 @@ fn restore_tag_record(connection: &mut Connection, tag_id: &str) -> Result<(), S
 fn update_tag_color(
     tag_id: String,
     color: String,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let color = normalize_tag_color(&color)?;
-    let mut connection = admin_connection(&state, "update-tag-color", false)?;
+    let mut connection = admin_connection(&state, &vault_path, "update-tag-color", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let (tag_name, old_color): (String, String) = transaction
         .query_row(
@@ -6053,9 +7193,11 @@ fn list_people(
     search: String,
     tag_search: String,
     book_id: Option<String>,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<Person>, String> {
-    let connection = active_connection(&state)?;
+    let connection = scoped_read_connection(&state, &vault_path)?;
+    ensure_money_totals_safe(&connection)?;
     let pattern = format!("%{}%", search.trim());
     let tag_pattern = format!("%{}%", tag_search.trim());
     let tags_by_person = person_tag_map(&connection)?;
@@ -6089,7 +7231,7 @@ fn list_people(
                 address: row.get(2)?,
                 notes: row.get(3)?,
                 tags: Vec::new(),
-                total_fen: row.get(4)?,
+                total_fen: read_money_fen(row, 4)?,
                 gift_count: row.get(5)?,
             })
         })
@@ -6100,6 +7242,7 @@ fn list_people(
     for person in &mut people {
         person.tags = tags_by_person.get(&person.id).cloned().unwrap_or_default();
     }
+    checked_money_total(people.iter().map(|person| person.total_fen))?;
     Ok(people)
 }
 
@@ -6107,18 +7250,21 @@ fn list_people(
 fn set_person_tags(
     person_id: String,
     tag_ids: Vec<String>,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    let vault_path = displayable_path(&active_vault_path(&state)?);
-    let mut connection = admin_connection(&state, "set-person-tags", false)?;
+    let audit_vault_path =
+        displayable_path(&canonical_opened_vault_path(&state, Some(&vault_path))?);
+    let mut connection = admin_connection(&state, &vault_path, "set-person-tags", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let person_name: String = transaction
         .query_row(
-            "SELECT display_name FROM people WHERE id = ?",
+            "SELECT display_name FROM people WHERE id = ? AND deleted_at IS NULL",
             params![person_id],
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
+    let before_ids = active_person_tag_ids(&transaction, &person_id)?;
     let before_tags: String = transaction
         .query_row(
             "SELECT COALESCE((SELECT GROUP_CONCAT(t.name, '、') FROM person_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.person_id = p.id AND t.deleted_at IS NULL), '') FROM people p WHERE p.id = ?",
@@ -6132,14 +7278,8 @@ fn set_person_tags(
             params![person_id],
         )
         .map_err(|e| e.to_string())?;
-    for tag_id in tag_ids {
-        transaction
-            .execute(
-                "INSERT INTO person_tags(person_id, tag_id) VALUES (?, ?)",
-                params![person_id, tag_id],
-            )
-            .map_err(|e| e.to_string())?;
-    }
+    apply_entry_tags(&transaction, &person_id, &tag_ids)?;
+    let after_ids = active_person_tag_ids(&transaction, &person_id)?;
     let after_tags: String = transaction
         .query_row(
             "SELECT COALESCE((SELECT GROUP_CONCAT(t.name, '、') FROM person_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.person_id = p.id AND t.deleted_at IS NULL), '') FROM people p WHERE p.id = ?",
@@ -6147,7 +7287,7 @@ fn set_person_tags(
             |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
-    if before_tags != after_tags {
+    if before_ids != after_ids {
         let book_sources = audit_person_book_sources(&transaction, &person_id)?;
         let book_titles = book_sources
             .iter()
@@ -6171,24 +7311,25 @@ fn set_person_tags(
                 target: person_name,
                 book_title: Some(book_title),
                 description: "修改人物标签".to_string(),
-                changes: vec![audit_change(
-                    "人物标签",
-                    if before_tags.is_empty() {
-                        "未设置"
+                changes: vec![{
+                    let mut change = machine_change("人物标签", "tag_ids", &before_ids, &after_ids);
+                    change.before = if before_tags.is_empty() {
+                        "未设置".to_string()
                     } else {
-                        &before_tags
-                    },
-                    if after_tags.is_empty() {
-                        "未设置"
+                        before_tags
+                    };
+                    change.after = if after_tags.is_empty() {
+                        "未设置".to_string()
                     } else {
-                        &after_tags
-                    },
-                )],
+                        after_tags
+                    };
+                    change
+                }],
             },
             Some(AuditContext {
                 person_id: person_id.clone(),
                 vault_id: audit_vault_id(&transaction)?,
-                vault_path,
+                vault_path: audit_vault_path,
                 book_id: book_ids.first().cloned(),
                 book_ids,
                 book_titles,
@@ -6200,13 +7341,17 @@ fn set_person_tags(
 }
 
 #[tauri::command]
-fn list_book_stats(state: State<'_, AppState>) -> Result<Vec<BookStat>, String> {
-    let connection = active_connection(&state)?;
+fn list_book_stats(
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<BookStat>, String> {
+    let connection = scoped_read_connection(&state, &vault_path)?;
+    ensure_money_totals_safe(&connection)?;
     let mut statement = connection.prepare("SELECT b.id, b.title, b.event_date, COUNT(DISTINCT e.person_id), COUNT(e.id), COALESCE(SUM(e.amount_fen), 0) FROM gift_books b LEFT JOIN gift_entries e ON e.book_id = b.id AND e.deleted_at IS NULL WHERE b.deleted_at IS NULL GROUP BY b.id ORDER BY COALESCE(b.event_date, b.created_at) DESC").map_err(|e| e.to_string())?;
     let rows = statement
         .query_map([], |row| {
             let gift_count: i64 = row.get(4)?;
-            let total_fen: i64 = row.get(5)?;
+            let total_fen: i64 = read_money_fen(row, 5)?;
             Ok(BookStat {
                 book_id: row.get(0)?,
                 title: row.get(1)?,
@@ -6217,13 +7362,21 @@ fn list_book_stats(state: State<'_, AppState>) -> Result<Vec<BookStat>, String> 
             })
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+    let records = rows
+        .collect::<Result<Vec<BookStat>, _>>()
+        .map_err(|e| e.to_string())?;
+    checked_money_total(records.iter().map(|record| record.total_fen))?;
+    Ok(records)
 }
 
 #[tauri::command]
-fn book_summary(book_id: String, state: State<'_, AppState>) -> Result<BookSummary, String> {
-    let connection = active_connection(&state)?;
+fn book_summary(
+    book_id: String,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<BookSummary, String> {
+    let connection = scoped_read_connection(&state, &vault_path)?;
+    ensure_money_totals_safe(&connection)?;
     let result_book_id = book_id.clone();
     connection
         .query_row(
@@ -6236,8 +7389,8 @@ fn book_summary(book_id: String, state: State<'_, AppState>) -> Result<BookSumma
                 Ok(BookSummary {
                     book_id: result_book_id.clone(),
                     gift_count: row.get(0)?,
-                    highest_amount_fen: row.get(1)?,
-                    total_fen: row.get(2)?,
+                    highest_amount_fen: read_money_fen(row, 1)?,
+                    total_fen: read_money_fen(row, 2)?,
                 })
             },
         )
@@ -6247,9 +7400,11 @@ fn book_summary(book_id: String, state: State<'_, AppState>) -> Result<BookSumma
 #[tauri::command]
 fn person_history(
     person_id: String,
+    vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<Vec<PersonHistory>, String> {
-    let connection = active_connection(&state)?;
+    let connection = scoped_read_connection(&state, &vault_path)?;
+    ensure_money_totals_safe(&connection)?;
     let mut statement = connection.prepare("SELECT b.id, b.title, b.event_date, COUNT(e.id), COALESCE(SUM(e.amount_fen), 0), MAX(e.received_at) FROM gift_books b JOIN gift_entries e ON e.book_id = b.id WHERE b.deleted_at IS NULL AND e.person_id = ? AND e.deleted_at IS NULL GROUP BY b.id ORDER BY COALESCE(b.event_date, MAX(e.received_at)) DESC").map_err(|e| e.to_string())?;
     let rows = statement
         .query_map(params![person_id], |row| {
@@ -6258,13 +7413,16 @@ fn person_history(
                 book_title: row.get(1)?,
                 event_date: row.get(2)?,
                 gift_count: row.get(3)?,
-                total_fen: row.get(4)?,
+                total_fen: read_money_fen(row, 4)?,
                 latest_received_at: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+    let records = rows
+        .collect::<Result<Vec<PersonHistory>, _>>()
+        .map_err(|e| e.to_string())?;
+    checked_money_total(records.iter().map(|record| record.total_fen))?;
+    Ok(records)
 }
 
 fn open_comparison_connection(path: &Path) -> Result<Connection, String> {
@@ -6311,6 +7469,7 @@ fn comparison_books_from_connection(
     vault_path: &str,
     vault_name: &str,
 ) -> Result<Vec<ComparisonBook>, String> {
+    ensure_money_totals_safe(connection)?;
     let mut statement = connection
         .prepare(
             "SELECT b.id, b.title, b.event_date, COUNT(DISTINCT e.person_id), COUNT(e.id), COALESCE(SUM(e.amount_fen), 0)
@@ -6331,12 +7490,15 @@ fn comparison_books_from_connection(
                 event_date: row.get(2)?,
                 people_count: row.get(3)?,
                 gift_count: row.get(4)?,
-                total_fen: row.get(5)?,
+                total_fen: read_money_fen(row, 5)?,
             })
         })
         .map_err(|error| error.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    let records = rows
+        .collect::<Result<Vec<ComparisonBook>, _>>()
+        .map_err(|e| e.to_string())?;
+    checked_money_total(records.iter().map(|record| record.total_fen))?;
+    Ok(records)
 }
 
 fn comparison_book_entries_from_connection(
@@ -6471,6 +7633,7 @@ fn comparison_person_source_map(
     vault_name: &str,
     book_id: Option<&str>,
 ) -> Result<HashMap<String, Vec<ComparisonPersonSource>>, String> {
+    ensure_money_totals_safe(connection)?;
     let mut statement = connection
         .prepare(
             "SELECT e.person_id, b.id, b.title, b.event_date, COUNT(e.id), COALESCE(SUM(e.amount_fen), 0)
@@ -6493,7 +7656,7 @@ fn comparison_person_source_map(
                     book_title: row.get(2)?,
                     event_date: row.get(3)?,
                     gift_count: row.get(4)?,
-                    total_fen: row.get(5)?,
+                    total_fen: read_money_fen(row, 5)?,
                 },
             ))
         })
@@ -6513,6 +7676,7 @@ fn comparison_person_history_from_connection(
     person_id: &str,
     book_id: Option<&str>,
 ) -> Result<Vec<ComparisonPersonHistory>, String> {
+    ensure_money_totals_safe(connection)?;
     let maybe_person: Option<(String, Option<String>, Option<String>)> = connection
         .query_row(
             "SELECT display_name, address, notes FROM people WHERE id = ? AND deleted_at IS NULL",
@@ -6553,17 +7717,20 @@ fn comparison_person_history_from_connection(
                 book_title: row.get(2)?,
                 event_date: row.get(3)?,
                 gift_count: 1,
-                total_fen: row.get(4)?,
+                total_fen: read_money_fen(row, 4)?,
                 payment_method: row.get(5)?,
                 note: row.get(6)?,
                 return_gift: row.get(7)?,
-                return_gift_amount_fen: row.get(8)?,
+                return_gift_amount_fen: read_optional_money_fen(row, 8)?,
                 latest_received_at: row.get(9)?,
             })
         })
         .map_err(|error| error.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|error| error.to_string())
+    let records = rows
+        .collect::<Result<Vec<ComparisonPersonHistory>, _>>()
+        .map_err(|e| e.to_string())?;
+    checked_money_total(records.iter().map(|record| record.total_fen))?;
+    Ok(records)
 }
 
 fn comparison_vault_paths(
@@ -7043,6 +8210,9 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running 礼金簿");
 }
+
+#[cfg(test)]
+mod data_regression_tests;
 
 #[cfg(test)]
 mod tests {
@@ -7731,7 +8901,7 @@ mod tests {
         assert_eq!(normalized_header("\u{feff}姓名"), "姓名");
         assert_eq!(
             column_index(
-                &vec!["姓名".to_string(), "礼金金额".to_string()],
+                &["姓名".to_string(), "礼金金额".to_string()],
                 &["金额", "amount"]
             ),
             Some(1)
@@ -8401,7 +9571,16 @@ mod tests {
                     target: "二狗".to_string(),
                     book_title: Some("测试数据 B".to_string()),
                     description: "修改人物标签".to_string(),
-                    changes: vec![audit_change("人物标签", before, after)],
+                    changes: vec![{
+                        let mut change = audit_change("人物标签", before, after);
+                        change.machine = Some(AuditMachineChange {
+                            version: 1,
+                            field_id: "tag_ids".to_string(),
+                            before: serde_json::json!([before]),
+                            after: serde_json::json!([after]),
+                        });
+                        change
+                    }],
                 },
             )
             .expect("write tag audit");
@@ -8497,7 +9676,7 @@ mod tests {
             .expect("test backup");
         }
 
-        prune_automatic_backups(&directory).expect("prune backups");
+        prune_automatic_backups(&directory, None).expect("prune backups");
         let remaining = std::fs::read_dir(&directory)
             .expect("read backup directory")
             .filter_map(Result::ok)

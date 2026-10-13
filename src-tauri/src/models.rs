@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VaultInfo {
     pub path: String,
     pub name: String,
@@ -274,6 +275,17 @@ pub struct AuditChange {
     pub field: String,
     pub before: String,
     pub after: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<AuditMachineChange>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditMachineChange {
+    pub version: u8,
+    pub field_id: String,
+    pub before: serde_json::Value,
+    pub after: serde_json::Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -288,6 +300,8 @@ pub struct AuditLog {
     pub description: String,
     pub changes: Vec<AuditChange>,
     pub created_at: String,
+    pub reversible: bool,
+    pub reversible_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
