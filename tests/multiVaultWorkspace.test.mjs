@@ -136,8 +136,8 @@ test("vault metadata editing and complete export use vault-level commands", asyn
   assert.match(apiSource, /invoke<string>\("export_vault"/);
   assert.match(rust, /fn edit_vault\(/);
   assert.match(rust, /fn export_vault\(/);
-  assert.match(rust, /VACUUM INTO/);
-  assert.match(rust, /validate_vault_file\(&destination\)/);
+  assert.match(rust, /Backup::new\(/);
+  assert.match(rust, /publish_no_replace\(/);
   assert.match(rust, /\("vault", "update"\)/);
 });
 

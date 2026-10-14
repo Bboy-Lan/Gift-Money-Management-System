@@ -47,7 +47,7 @@ test("gift-book order stays isolated per vault and appends books created after t
 test("sidebar exposes pointer long-press ordering without changing the selected gift book", async () => {
   const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
   const workspace = source.slice(source.indexOf("function VaultWorkspace"), source.indexOf("function EntriesView"));
-  const bookRow = workspace.slice(workspace.indexOf("{orderedBooks.map"), workspace.indexOf("{!books.isLoading"));
+  const bookRow = workspace.slice(workspace.indexOf("{orderedBooks.map"), workspace.indexOf("{books.isSuccess"));
 
   assert.match(workspace, /const \[bookOrder, setBookOrder\]/);
   assert.match(bookRow, /onPointerDown/);

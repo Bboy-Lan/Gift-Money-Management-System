@@ -10,6 +10,17 @@ export interface OpenedVaultSessionState {
 const STORAGE_KEY = "lijin-book.opened-vault-sessions";
 const TABS: readonly Tab[] = ["entries", "people", "compare", "returnGifts", "history", "trash", "settings"];
 
+export async function closeVaultSession<T extends { path: string }>(sessions: readonly T[], activePath: string | null, closingPath: string, close: (path: string) => Promise<void>) {
+  await close(closingPath);
+  const remaining = sessions.filter((session) => pathKey(session.path) !== pathKey(closingPath));
+  return { sessions: remaining, activePath: activePath && pathKey(activePath) !== pathKey(closingPath) ? activePath : remaining.at(-1)?.path ?? null };
+}
+
+export async function navigateVaultResult<T>(target: { path: string; bookId: string; entryId?: string | null }, open: (path: string) => Promise<T>, apply: (navigation: { result: T; bookId: string; entryId: string | null; tab: Tab }) => void) {
+  const result = await open(target.path);
+  apply({ result, bookId: target.bookId, entryId: target.entryId ?? null, tab: "entries" });
+}
+
 function getStorage(storage?: Storage): Storage | null {
   if (storage) return storage;
   if (typeof window === "undefined") return null;

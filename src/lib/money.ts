@@ -6,7 +6,7 @@ export function parseAmountFen(value: string): number | null {
   if (!Number.isSafeInteger(yuan)) return null;
   const cents = decimal.length === 0 ? 0 : Number.parseInt(decimal.padEnd(2, "0"), 10);
   const result = yuan * 100 + cents;
-  return Number.isSafeInteger(result) && result > 0 ? result : null;
+  return Number.isSafeInteger(result) && result > 0 && result <= 999_999_999_999 ? result : null;
 }
 
 export function formatMoney(fen: number): string {

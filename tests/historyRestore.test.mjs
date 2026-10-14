@@ -22,7 +22,7 @@ test("history recovery keeps batch selection actionable and refreshes all affect
   const historyView = app.slice(app.indexOf("function HistoryView"), app.indexOf("function formatReturnGiftTime"));
 
   assert.match(historyView, /const restoreAllowed = selectedCount > 0 && selectedRecords\.every\(isRestorableAuditRecord\)/);
-  assert.match(historyView, /await client\.invalidateQueries\(\)/);
+  assert.match(historyView, /await invalidateVaultQueries\(client, vaultPath\)/);
   assert.match(historyView, /onNotice\(`恢复成功：\$\{historyTargets\(records\)\}`\)/);
   assert.match(historyView, /onNotice\(`恢复失败：\$\{String\(error\)\.replace/);
   assert.match(historyView, /onVaultUpdated\(await api\.currentVaultInfo\(\)\)/);

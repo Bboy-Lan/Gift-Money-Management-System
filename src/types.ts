@@ -11,6 +11,7 @@ export interface AuditChange {
   field: string;
   before: string;
   after: string;
+  machine?: { version: number; fieldId: string; before: unknown; after: unknown };
 }
 
 export interface AuditLog {
@@ -23,6 +24,8 @@ export interface AuditLog {
   description: string;
   changes: AuditChange[];
   createdAt: string;
+  reversible: boolean;
+  reversibleReason: string | null;
 }
 
 export type SessionRole = "viewer" | "admin";

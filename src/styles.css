@@ -1023,3 +1023,8 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 .entry-details-panel strong { color: #48616a; font-weight: 500; }
 @media (max-width: 720px) { .table-style-settings ol { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .batch-import-toolbar { align-items: stretch; grid-template-columns: 1fr; } .batch-target-fields { min-width: 0; grid-template-columns: 1fr; } .batch-import-toolbar > button { justify-self: end; margin-top: 0; } }
+/* Persistent read and form failures stay with the affected content. */
+.query-error, .form-error { margin: 12px 0; padding: 12px 14px; border: 1px solid #d7a2a2; border-radius: 8px; color: #8b2525; background: #fff7f7; }
+.query-error { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.query-error small { flex-basis: 100%; }
+.query-error span { overflow-wrap: anywhere; }

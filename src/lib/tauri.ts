@@ -1,7 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AuditLog, BookStat, BookSummary, ComparisonBook, ComparisonBookEntry, ComparisonBookRef, ComparisonPerson, ComparisonPersonHistory, ComparisonPersonRef, GiftBook, GiftEntry, LocalUpdateStatus, Person, PersonHistory, ReturnGiftRecord, SearchResponse, SessionStatus, SettingsStorageInfo, Tag, TrashItem, VaultInfo, VaultOpenResult } from "../types";
 
-export const api = {
+const SCOPED_COMMANDS = new Set([
+  "edit_vault", "current_vault_info", "list_books", "create_book", "edit_book", "restore_book",
+  "preview_spreadsheet", "preview_spreadsheet_mapping", "import_spreadsheet", "export_book_xlsx", "export_vault",
+  "list_entries", "list_return_gifts", "update_return_gift_information", "search_vault", "create_entry", "update_entry",
+  "delete_entry", "restore_entry", "delete_person", "restore_person", "list_audit_logs", "restore_audit_logs", "clear_audit_logs",
+  "list_tags", "create_tag", "delete_tag", "update_tag_color", "list_people", "set_person_tags", "list_book_stats", "book_summary", "person_history",
+]);
+
+function createApi(invoke: typeof import("@tauri-apps/api/core").invoke) { return {
   chooseVaultPath: (mode: "open" | "save", fileName?: string) => fileName ? invoke<string | null>("choose_vault_path_named", { mode, fileName }) : invoke<string | null>("choose_vault_path", { mode }),
   chooseComparisonVaultPaths: () => invoke<string[]>("choose_comparison_vault_paths"),
   createVault: (path: string, name: string, notes: string) => invoke<VaultOpenResult>("create_vault", { path, name, notes }),
@@ -9,6 +17,7 @@ export const api = {
   currentVaultInfo: () => invoke<VaultInfo>("current_vault_info"),
   openVault: (path: string) => invoke<VaultOpenResult>("open_vault", { path }),
   closeVault: () => invoke<void>("close_vault"),
+  closeOpenedVault: (vaultPath: string) => invoke<void>("close_opened_vault", { vaultPath }),
   returnToStartPage: () => invoke<void>("return_to_start_page"),
   exitApp: () => invoke<void>("exit_app"),
   sessionStatus: () => invoke<SessionStatus>("session_status"),
@@ -95,7 +104,23 @@ export const api = {
   importSpreadsheets: (items: SpreadsheetImportItem[]) => invoke<SpreadsheetBatchImportResult>("import_spreadsheets", { items }),
   exportBookXlsx: (bookId: string, columns?: string[]) => invoke<string>("export_book_xlsx", { bookId, columns }),
   exportVault: () => invoke<string>("export_vault"),
-};
+}; }
+
+export const api = createApi(async (command, args) => {
+  if (SCOPED_COMMANDS.has(command)) throw new Error("此操作需要明确的礼金库，请重新打开页面");
+  return invoke(command, args);
+});
+
+/** Both query functions and form mutations keep the path of their owning view. */
+export function createVaultApi(vaultPath: string, isCurrent: () => boolean = () => true) {
+  return createApi(async <T>(command: string, args?: Parameters<typeof invoke>[1]): Promise<T> => {
+    if (!vaultPath.trim()) throw new Error("未选择礼金库");
+    if (!isCurrent()) throw new Error("礼金库页面已切换或已关闭，请在当前页面重试");
+    const result = await invoke<T>(command, SCOPED_COMMANDS.has(command) ? { ...args, vaultPath } : args);
+    if (!isCurrent()) throw new Error("礼金库页面已切换或已关闭，已忽略过期结果");
+    return result;
+  });
+}
 
 export interface SpreadsheetPreview {
   fileName: string;
