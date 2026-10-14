@@ -156,7 +156,7 @@ async function actualComponents() {
   if (!componentModule) componentModule = (async () => {
     const source = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     const result = await build({ stdin: { contents: source.replace('export default App;', 'export { Modal, EntriesView, EntryModal, HistoryView, BookMetadataModal, canLeaveWorkspace };'), resolveDir: fileURLToPath(new URL('../src', import.meta.url)), loader: 'tsx' }, bundle: true, write: false, platform: 'node', format: 'esm', jsx: 'automatic', loader: { '.png': 'dataurl' }, plugins: [{ name: 'external-dependencies', setup(builder) { builder.onResolve({ filter: /^[^./]/ }, (args) => ({ path: import.meta.resolve(args.path), external: true })); } }] });
-    const bundle = new URL(`../.codex/remediation-20261013/frontend-components-${process.pid}.mjs`, import.meta.url);
+    const bundle = new URL(`./.frontend-components-${process.pid}.mjs`, import.meta.url);
     await writeFile(bundle, result.outputFiles[0].text);
     try { return await import(bundle.href); } finally { await unlink(bundle); }
   })();
@@ -230,7 +230,7 @@ test('real entry save preserves unchanged legacy person name and address instead
 test('any saving modal vetoes workspace navigation even when an earlier dirty modal allows discard', async () => {
   const { canLeaveWorkspace } = await actualComponents();
   const oldDocument = globalThis.document; const oldWindow = globalThis.window;
-  globalThis.document = { querySelector: (selector) => selector.includes(',') || selector.includes('dirty') ? { dataset: { modalDirty: 'true', modalSaving: 'false' } } : { dataset: { modalSaving: 'true' } } };
+  globalThis.document = { querySelectorAll: () => [{ dataset: { modalDirty: 'true', modalSaving: 'false' } }, { dataset: { modalSaving: 'true' } }] };
   globalThis.window = { confirm: () => true };
   try { assert.equal(canLeaveWorkspace(), false); } finally { globalThis.document = oldDocument; globalThis.window = oldWindow; }
 });

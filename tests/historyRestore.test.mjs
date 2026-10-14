@@ -25,7 +25,8 @@ test("history recovery keeps batch selection actionable and refreshes all affect
   assert.match(historyView, /await invalidateVaultQueries\(client, vaultPath\)/);
   assert.match(historyView, /onNotice\(`恢复成功：\$\{historyTargets\(records\)\}`\)/);
   assert.match(historyView, /onNotice\(`恢复失败：\$\{String\(error\)\.replace/);
-  assert.match(historyView, /onVaultUpdated\(await api\.currentVaultInfo\(\)\)/);
+  assert.match(historyView, /const updated = await api\.currentVaultInfo\(\)/);
+  assert.match(historyView, /if \(!api\.isCurrent\(\)\) return;\s+onVaultUpdated\(updated\)/);
   assert.match(historyView, /<th className="audit-time">时间<\/th><th className="audit-object">对象<\/th><th className="audit-vault">礼金库<\/th><th className="audit-book">礼金簿<\/th><th className="audit-action">操作<\/th><th className="audit-detail">变更明细<\/th>/);
 });
 

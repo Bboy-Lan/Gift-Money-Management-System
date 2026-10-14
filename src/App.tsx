@@ -184,8 +184,8 @@ function App() {
   const [switching, setSwitching] = useState(false);
   const navigationBusy = useRef(false);
   const [navigationEntryId, setNavigationEntryId] = useState<string | null>(null);
-  const beginNavigation = (completedOperation = false) => {
-    if (navigationBusy.current || (!completedOperation && !canLeaveWorkspace())) return false;
+  const beginNavigation = (completedForm: HTMLElement | null = null) => {
+    if (navigationBusy.current || !canLeaveWorkspace(completedForm)) return false;
     navigationBusy.current = true; scopeRef.current.active = false; setSwitching(true); return true;
   };
   const endNavigation = () => { navigationBusy.current = false; setScope({ active: true }); setSwitching(false); };
@@ -530,8 +530,9 @@ function App() {
     try {
       const path = await api.chooseVaultPath("open");
       if (path) {
+        const result = await api.openVault(path);
         setNavigationEntryId(null);
-        applyOpenResult(await api.openVault(path));
+        applyOpenResult(result);
       }
     } catch (err) {
       setError(String(err));
@@ -544,8 +545,9 @@ function App() {
     setError(null);
     try {
       const saved = openedVaults.find((item) => vaultPathKey(item.vault.path) === vaultPathKey(path));
+      const result = await api.openVault(path);
       setNavigationEntryId(null);
-      applyOpenResult(await api.openVault(path), saved?.activeBookId ?? bookSelections[vaultPathKey(path)] ?? null);
+      applyOpenResult(result, saved?.activeBookId ?? bookSelections[vaultPathKey(path)] ?? null);
     } catch (err) { setError(String(err)); } finally { endNavigation(); }
   };
 
@@ -566,8 +568,8 @@ function App() {
     } catch (err) { setError(String(err)); } finally { endNavigation(); }
   };
 
-  const openSearchVault = async (path: string, bookId: string, entryId: string | null = null, completedOperation = false) => {
-    if (!beginNavigation(completedOperation)) throw new Error("请先完成当前操作");
+  const openSearchVault = async (path: string, bookId: string, entryId: string | null = null, completedForm: HTMLElement | null = null) => {
+    if (!beginNavigation(completedForm)) throw new Error("请先完成当前操作");
     try {
       await navigateVaultResult({ path, bookId, entryId }, api.openVault, (navigation) => {
         setNavigationEntryId(navigation.entryId);
@@ -577,7 +579,7 @@ function App() {
   };
 
   const createVault = async () => {
-    if (!beginNavigation(true)) return;
+    if (!beginNavigation(document.querySelector<HTMLElement>('[data-modal-owner="create-vault"]'))) return;
     setCreateVaultSaving(true); setCreateVaultError(null);
     setError(null);
     try {
@@ -877,7 +879,7 @@ function WorkspaceStart({ session, pendingSpreadsheetPaths, onClose, onOpenVault
 
 function CreateVaultModal({ error, isSaving, vaultName, vaultNotes, onNameChange, onNotesChange, onClose, onCreate }: { error: unknown; isSaving: boolean; vaultName: string; vaultNotes: string; onNameChange: (value: string) => void; onNotesChange: (value: string) => void; onClose: () => void; onCreate: () => void }) {
   const validationError = validateChangedText("礼金库名称", vaultName, 256) || validateChangedText("礼金库备注", vaultNotes, 65536);
-  return <Modal title="新建家庭礼金库" onClose={onClose} isSaving={isSaving} error={error || validationError}><label>礼金库名称<input value={vaultName} onChange={(event) => onNameChange(event.target.value)} autoFocus /></label><label>礼金库备注<textarea value={vaultNotes} onChange={(event) => onNotesChange(event.target.value)} placeholder="可选，例如家庭成员或使用范围" /></label><p className="field-hint">礼金库创建后会直接进入工作页。</p><div className="modal-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={!vaultName.trim() || Boolean(validationError) || isSaving} onClick={onCreate}>选择保存位置</button></div></Modal>;
+  return <Modal title="新建家庭礼金库" owner="create-vault" onClose={onClose} isSaving={isSaving} error={error || validationError}><label>礼金库名称<input value={vaultName} onChange={(event) => onNameChange(event.target.value)} autoFocus /></label><label>礼金库备注<textarea value={vaultNotes} onChange={(event) => onNotesChange(event.target.value)} placeholder="可选，例如家庭成员或使用范围" /></label><p className="field-hint">礼金库创建后会直接进入工作页。</p><div className="modal-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={!vaultName.trim() || Boolean(validationError) || isSaving} onClick={onCreate}>选择保存位置</button></div></Modal>;
 }
 
 function OpenedVaultTab({ item, active, dragged, dropTarget, onSwitch, onClose, onDragState, onDrop }: { item: OpenedVaultSession; active: boolean; dragged: boolean; dropTarget: boolean; onSwitch: (path: string) => void; onClose: (path: string) => void; onDragState: (path: string | null, target: string | null) => void; onDrop: (path: string, target: string | null) => void }) {
@@ -964,7 +966,7 @@ function VaultMetadataModal({ error, vault, isSaving, onClose, onSubmit }: { err
   return <Modal title="编辑礼金库" onClose={onClose} isSaving={isSaving} error={error || validationError}><label>礼金库名称<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>礼金库备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="可选" /></label><p className="field-hint">只修改礼金库自身信息，不会改变内部礼金簿、人物或礼金记录的归属。</p><div className="modal-actions"><button className="secondary-button" disabled={isSaving} onClick={onClose}>取消</button><button className="primary-button" disabled={!name.trim() || Boolean(validationError) || isSaving} onClick={() => onSubmit(name === vault.name ? name : name.trim(), notes)}>{isSaving ? "保存中…" : "保存修改"}</button></div></Modal>;
 }
 
-function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, initialTab, session, continuousRegistration, onContinuousRegistrationChange, onClose, onCloseVault, onReorderVaults, onError, onNotice, onUnlock, onLock, onUnlockEditing, onLockEditing, onChangePin, onCheckLocalUpdate, onInstallLocalUpdate, localUpdatePhase, updateStatus, lastUpdateCheckAt, pendingSpreadsheetPaths, onConsumeSpreadsheetPaths, onBeginCreateVault, onOpenVault, onSwitchVault, onOpenSearchVault, onBookSelectionChange, onTabChange, onVaultActivity, onVaultUpdated }: { initialEntryId: string | null; vault: VaultInfo; openedVaults: OpenedVaultSession[]; initialBookId: string | null; initialTab: Tab; session: SessionStatus; continuousRegistration: boolean; onContinuousRegistrationChange: (enabled: boolean) => void; onClose: () => void; onCloseVault: (path: string) => void | Promise<void>; onReorderVaults: (draggedPath: string, targetPath: string) => void; onError: (message: string) => void; onNotice: (message: string) => void; onUnlock: () => void; onLock: () => void; onUnlockEditing: () => void; onLockEditing: () => void; onChangePin: () => void; onCheckLocalUpdate: () => void; onInstallLocalUpdate: () => void; localUpdatePhase: LocalUpdatePhase; updateStatus: import("./types").LocalUpdateStatus | null; lastUpdateCheckAt: string | null; pendingSpreadsheetPaths: string[]; onConsumeSpreadsheetPaths: () => void; onBeginCreateVault: () => void; onOpenVault: () => void; onSwitchVault: (path: string) => Promise<void>; onOpenSearchVault: (path: string, bookId: string, entryId?: string | null, completedOperation?: boolean) => Promise<void>; onBookSelectionChange: (bookId: string | null) => void; onTabChange: (tab: Tab) => void; onVaultActivity: (book?: Pick<GiftBook, "id" | "title">) => void; onVaultUpdated: (vault: VaultInfo) => void }) {
+function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, initialTab, session, continuousRegistration, onContinuousRegistrationChange, onClose, onCloseVault, onReorderVaults, onError, onNotice, onUnlock, onLock, onUnlockEditing, onLockEditing, onChangePin, onCheckLocalUpdate, onInstallLocalUpdate, localUpdatePhase, updateStatus, lastUpdateCheckAt, pendingSpreadsheetPaths, onConsumeSpreadsheetPaths, onBeginCreateVault, onOpenVault, onSwitchVault, onOpenSearchVault, onBookSelectionChange, onTabChange, onVaultActivity, onVaultUpdated }: { initialEntryId: string | null; vault: VaultInfo; openedVaults: OpenedVaultSession[]; initialBookId: string | null; initialTab: Tab; session: SessionStatus; continuousRegistration: boolean; onContinuousRegistrationChange: (enabled: boolean) => void; onClose: () => void; onCloseVault: (path: string) => void | Promise<void>; onReorderVaults: (draggedPath: string, targetPath: string) => void; onError: (message: string) => void; onNotice: (message: string) => void; onUnlock: () => void; onLock: () => void; onUnlockEditing: () => void; onLockEditing: () => void; onChangePin: () => void; onCheckLocalUpdate: () => void; onInstallLocalUpdate: () => void; localUpdatePhase: LocalUpdatePhase; updateStatus: import("./types").LocalUpdateStatus | null; lastUpdateCheckAt: string | null; pendingSpreadsheetPaths: string[]; onConsumeSpreadsheetPaths: () => void; onBeginCreateVault: () => void; onOpenVault: () => void; onSwitchVault: (path: string) => Promise<void>; onOpenSearchVault: (path: string, bookId: string, entryId?: string | null, completedForm?: HTMLElement | null) => Promise<void>; onBookSelectionChange: (bookId: string | null) => void; onTabChange: (tab: Tab) => void; onVaultActivity: (book?: Pick<GiftBook, "id" | "title">) => void; onVaultUpdated: (vault: VaultInfo) => void }) {
   const api = useVaultApi(vault.path);
   const client = useQueryClient();
   const [activeBookId, setActiveBookId] = useState<string | null>(initialBookId);
@@ -986,7 +988,15 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
   const [vaultEditOpen, setVaultEditOpen] = useState(false);
   const [vaultEditSaving, setVaultEditSaving] = useState(false);
   const [vaultEditError, setVaultEditError] = useState<unknown>(null);
-  const [bookEditOpen, setBookEditOpen] = useState(false);
+  const [bookEditTarget, setBookEditTarget] = useState<GiftBook | null>(null);
+  const bookEditTargetRef = useRef(bookEditTarget); bookEditTargetRef.current = bookEditTarget;
+  useEffect(() => { if (bookEditTarget && bookEditTarget.id !== activeBookId) setBookEditTarget(null); }, [activeBookId, bookEditTarget]);
+  const leaveLocalView = () => {
+    if (!canLeaveWorkspace()) return false;
+    setBookModal(false); bookEditTargetRef.current = null; setBookEditTarget(null); setVaultEditOpen(false); setSpreadsheetImportOpen(false); return true;
+  };
+  const selectBook = (bookId: string) => { if (bookId === activeBookId || !leaveLocalView()) return; setActiveBookId(bookId); onVaultActivity(); };
+  const selectTab = (tab: Tab) => { if (tab === activeTab || !leaveLocalView()) return; setActiveTab(tab); };
   const [bookEditSaving, setBookEditSaving] = useState(false);
   const [bookEditError, setBookEditError] = useState<unknown>(null);
   const [importError, setImportError] = useState<unknown>(null);
@@ -1119,7 +1129,7 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
 
   const createBook = useMutation({
     mutationFn: api.createBook,
-    onSuccess: (book) => { invalidateVaultQueries(client, vault.path); setActiveBookId(book.id); setBookModal(false); markVaultActivity(); },
+    onSuccess: (book) => { invalidateVaultQueries(client, vault.path); if (!api.isCurrent()) return; const completedForm = document.querySelector<HTMLElement>('[data-modal-owner="create-book"]'); setBookModal(false); if (!canLeaveWorkspace(completedForm)) { onNotice("礼金簿已创建，当前草稿仍保留。"); return; } setActiveBookId(book.id); markVaultActivity(); },
     onError: (err) => onError(String(err)),
   });
   const activeBook = books.data?.find((book) => book.id === activeBookId) ?? null;
@@ -1137,6 +1147,8 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
     setVaultEditSaving(true); setVaultEditError(null);
     try {
       const updated = await api.editVault(name, notes);
+      await invalidateVaultQueries(client, vault.path);
+      if (!api.isCurrent()) return;
       onVaultUpdated(updated);
       setVaultEditOpen(false);
       onNotice("礼金库信息已更新");
@@ -1147,12 +1159,14 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
     }
   };
   const editBook = async (input: { title: string; occasion: string; eventDate: string; location: string; notes: string }) => {
-    if (!activeBook) return;
+    const target = bookEditTarget;
+    if (!target || bookEditTargetRef.current !== target) return;
     setBookEditSaving(true); setBookEditError(null);
     try {
-      await api.editBook(activeBook.id, input);
+      await api.editBook(target.id, input);
       await invalidateVaultQueries(client, vault.path);
-      setBookEditOpen(false);
+      if (!api.isCurrent()) return;
+      setBookEditTarget(null);
       markVaultActivity();
       onNotice("礼金簿信息已更新");
     } catch (err) {
@@ -1162,16 +1176,18 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
     }
   };
   const openSearchHit = async (hit: SearchHit) => {
-    setSearch("");
-    setSearchOpen(false);
+    if (!canLeaveWorkspace()) return;
     if (vaultPathKey(hit.vaultPath) !== vaultPathKey(vault.path)) {
       try {
         await onOpenSearchVault(hit.vaultPath, hit.entry.bookId, hit.entry.id);
+        setSearch(""); setSearchOpen(false);
       } catch (err) {
         onError(String(err));
       }
       return;
     }
+    if (!leaveLocalView()) return;
+    setSearch(""); setSearchOpen(false);
     setActiveBookId(hit.entry.bookId);
     setActiveTab("entries");
     setFocusedEntryId(hit.entry.id);
@@ -1193,6 +1209,7 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
       if (kind === "person") await api.deletePerson(id);
       if (kind === "tag") await api.deleteTag(id);
       await invalidateVaultQueries(client, vault.path);
+      if (!api.isCurrent()) return;
       onVaultActivity();
       onNotice("已移入回收站，可在回收站中恢复");
     } catch (err) {
@@ -1270,12 +1287,13 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
   }, [onReorderVaults, vaultDropTargetPath]);
 
   const closeBook = (book: GiftBook) => {
+    if (!leaveLocalView()) return;
     setBookToClose(book);
   };
 
   const confirmCloseBook = () => {
     const book = bookToClose;
-    if (!book) return;
+    if (!book || !leaveLocalView()) return;
     setBookToClose(null);
     setClosedBookIds((current) => new Set(current).add(book.id));
     if (activeBookId === book.id) {
@@ -1295,7 +1313,7 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
     <div className="app-shell" onPointerDown={() => activityRef.current()} onKeyDown={() => activityRef.current()}>
       <header className="topbar">
         <div className="topbar-brand"><div className="brand-mark small"><BookOpen size={17} /></div><strong>礼金簿管理</strong><span className="slash">/</span><span className="vault-label">{activeBook?.title ?? vault.name}</span></div>
-          <div className="topbar-actions"><div className="global-search-wrap" ref={searchWrapRef}><label className="tag-search-field" aria-label="全库搜索"><Search size={16} /><input id="vault-global-search" value={search} onFocus={() => setSearchOpen(true)} onChange={(event) => { const value = event.target.value; setSearch(value); setSearchOpen(Boolean(value.trim())); }} placeholder="搜索姓名、金额、地址、标签等" /></label>{searchOpen && search.trim() && <SearchResults result={searchResults.data} isLoading={searchResults.isPending || search.trim() !== debouncedSearch.trim()} isError={searchResults.isError} onRetry={() => void searchResults.refetch()} onSelect={openSearchHit} />}</div><div className="file-info-wrap" ref={fileInfoWrapRef}><button className="offline-pill button-reset" onClick={() => setFileInfoOpen((open) => !open)}><span className="status-dot" />{isAdmin ? "管理员模式" : "用户模式"}</button>{fileInfoOpen && <div className="file-info-popover"><strong>{vault.name}</strong>{vault.notes && <span className="file-info-notes">{vault.notes}</span>}<span className="file-path">{vault.path}</span><span className={`role-badge ${isAdmin ? "admin" : "viewer"}`}>{isAdmin ? "管理员模式" : "用户模式"}</span><div className="popover-actions">{isAdmin && <button aria-pressed={continuousRegistration} className={`secondary-button compact continuous-registration-button ${continuousRegistration ? "active" : ""}`} disabled={!canEdit} data-operation-hint={!canEdit ? "提示：请先解锁编辑，再开始持续登记。" : continuousRegistration ? "提示：持续登记已开启，保存后会自动进入下一条；点击可关闭。" : "提示：点击开启持续登记，保存后会自动进入下一条。"} onClick={() => onContinuousRegistrationChange(!continuousRegistration)}>{continuousRegistration ? <Unlock size={14} /> : <LockKeyhole size={14} />}{continuousRegistration ? "持续登记：已开启" : "持续登记：已关闭"}</button>}{isAdmin ? <button className="secondary-button compact" title="切换到用户模式" onClick={onLock}><LockKeyhole size={14} />切换模式</button> : <button className="primary-button compact" onClick={onUnlock}><Unlock size={14} />解锁管理</button>}<button className="secondary-button compact" title="返回启动页" onClick={onClose}><ArrowLeft size={15} />返回启动页</button></div></div>}</div>{activeTab !== "entries" && <button className="secondary-button compact return-detail-button topbar-return-detail" title="返回明细" onClick={() => setActiveTab("entries")}><ArrowLeft size={15} />返回明细</button>}</div>
+          <div className="topbar-actions"><div className="global-search-wrap" ref={searchWrapRef}><label className="tag-search-field" aria-label="全库搜索"><Search size={16} /><input id="vault-global-search" value={search} onFocus={() => setSearchOpen(true)} onChange={(event) => { const value = event.target.value; setSearch(value); setSearchOpen(Boolean(value.trim())); }} placeholder="搜索姓名、金额、地址、标签等" /></label>{searchOpen && search.trim() && <SearchResults result={searchResults.data} isLoading={searchResults.isPending || search.trim() !== debouncedSearch.trim()} isError={searchResults.isError} onRetry={() => void searchResults.refetch()} onSelect={openSearchHit} />}</div><div className="file-info-wrap" ref={fileInfoWrapRef}><button className="offline-pill button-reset" onClick={() => setFileInfoOpen((open) => !open)}><span className="status-dot" />{isAdmin ? "管理员模式" : "用户模式"}</button>{fileInfoOpen && <div className="file-info-popover"><strong>{vault.name}</strong>{vault.notes && <span className="file-info-notes">{vault.notes}</span>}<span className="file-path">{vault.path}</span><span className={`role-badge ${isAdmin ? "admin" : "viewer"}`}>{isAdmin ? "管理员模式" : "用户模式"}</span><div className="popover-actions">{isAdmin && <button aria-pressed={continuousRegistration} className={`secondary-button compact continuous-registration-button ${continuousRegistration ? "active" : ""}`} disabled={!canEdit} data-operation-hint={!canEdit ? "提示：请先解锁编辑，再开始持续登记。" : continuousRegistration ? "提示：持续登记已开启，保存后会自动进入下一条；点击可关闭。" : "提示：点击开启持续登记，保存后会自动进入下一条。"} onClick={() => onContinuousRegistrationChange(!continuousRegistration)}>{continuousRegistration ? <Unlock size={14} /> : <LockKeyhole size={14} />}{continuousRegistration ? "持续登记：已开启" : "持续登记：已关闭"}</button>}{isAdmin ? <button className="secondary-button compact" title="切换到用户模式" onClick={onLock}><LockKeyhole size={14} />切换模式</button> : <button className="primary-button compact" onClick={onUnlock}><Unlock size={14} />解锁管理</button>}<button className="secondary-button compact" title="返回启动页" onClick={onClose}><ArrowLeft size={15} />返回启动页</button></div></div>}</div>{activeTab !== "entries" && <button className="secondary-button compact return-detail-button topbar-return-detail" title="返回明细" onClick={() => selectTab("entries")}><ArrowLeft size={15} />返回明细</button>}</div>
       </header>
       <nav className="opened-vault-tabs" aria-label="已打开礼金库">
         <div className="opened-vault-tabs-list">
@@ -1311,17 +1329,17 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
           <button className="sidebar-create sidebar-import" disabled={!isAdmin || !canEdit} title={isAdmin && !canEdit ? "请先解锁编辑" : undefined} onClick={async () => { if (!isAdmin) { onUnlock(); return; } if (!canEdit) return; try { const paths = await api.chooseSpreadsheetPaths(); if (paths.length) openSpreadsheetImport(paths); } catch (err) { onError(String(err)); } }}><FileSpreadsheet size={15} />导入表格</button>
           <div className="book-list">
             <QueryFeedback query={books} label="礼金簿" />
-          {orderedBooks.map((book) => <BookListItem key={book.id} data-book-id={book.id} book={book} active={book.id === activeBookId} dragged={draggedBookId === book.id} dropTarget={bookDropTargetId === book.id && draggedBookId !== book.id} onPointerDown={(event) => startBookDrag(event, book.id)} onPointerMove={moveBookDrag} onPointerUp={finishBookDrag} onPointerCancel={clearBookDrag} onSelect={() => { if (suppressBookClickRef.current) return; setActiveBookId(book.id); onVaultActivity(); }} onClose={() => closeBook(book)} />)}
+          {orderedBooks.map((book) => <BookListItem key={book.id} data-book-id={book.id} book={book} active={book.id === activeBookId} dragged={draggedBookId === book.id} dropTarget={bookDropTargetId === book.id && draggedBookId !== book.id} onPointerDown={(event) => startBookDrag(event, book.id)} onPointerMove={moveBookDrag} onPointerUp={finishBookDrag} onPointerCancel={clearBookDrag} onSelect={() => { if (suppressBookClickRef.current) return; selectBook(book.id); }} onClose={() => closeBook(book)} />)}
           {closedBookIds.size > 0 && <button type="button" className="closed-books-link" onClick={reopenClosedBooks}><Archive size={13} />已关闭礼金簿（{closedBookIds.size}）</button>}
             {books.isSuccess && books.data?.length === 0 && <div className="empty-mini">还没有礼金簿</div>}
           </div>
-          <div className="sidebar-bottom"><button className={`sidebar-link ${activeTab === "settings" ? "active" : ""}`} onClick={() => setActiveTab("settings")}><Settings size={15} />设置</button><button className={`sidebar-link ${activeTab === "returnGifts" ? "active" : ""}`} onClick={() => setActiveTab("returnGifts")}><Gift size={15} />回礼明细</button><button className={`sidebar-link ${activeTab === "history" ? "active" : ""}`} onClick={() => setActiveTab("history")}><History size={15} />历史改动</button><button className={`sidebar-link trash-drop-target ${activeTab === "trash" ? "active" : ""} ${trashDropActive ? "drag-over" : ""}`} onDragOver={(event) => { event.preventDefault(); setTrashDropActive(true); }} onDragLeave={() => setTrashDropActive(false)} onDrop={(event) => void dropToTrash(event)} onClick={() => setActiveTab("trash")}><Trash2 size={15} />回收站</button><VersionBadge /></div>
+          <div className="sidebar-bottom"><button className={`sidebar-link ${activeTab === "settings" ? "active" : ""}`} onClick={() => selectTab("settings")}><Settings size={15} />设置</button><button className={`sidebar-link ${activeTab === "returnGifts" ? "active" : ""}`} onClick={() => selectTab("returnGifts")}><Gift size={15} />回礼明细</button><button className={`sidebar-link ${activeTab === "history" ? "active" : ""}`} onClick={() => selectTab("history")}><History size={15} />历史改动</button><button className={`sidebar-link trash-drop-target ${activeTab === "trash" ? "active" : ""} ${trashDropActive ? "drag-over" : ""}`} onDragOver={(event) => { event.preventDefault(); setTrashDropActive(true); }} onDragLeave={() => setTrashDropActive(false)} onDrop={(event) => void dropToTrash(event)} onClick={() => selectTab("trash")}><Trash2 size={15} />回收站</button><VersionBadge /></div>
         </aside>
         <main className="content-area">
           {activeTab === "settings" ? <div className="content-view settings"><SettingsView session={session} onUnlock={onUnlock} onUnlockEditing={onUnlockEditing} onLockEditing={onLockEditing} onChangePin={onChangePin} onCheckUpdate={onCheckLocalUpdate} onInstallUpdate={onInstallLocalUpdate} updatePhase={localUpdatePhase} updateStatus={updateStatus} lastUpdateCheckAt={lastUpdateCheckAt} onNotice={onNotice} onError={onError} /></div> : activeTab === "trash" && !activeBook ? <div className="content-view trash"><TrashView scopeDescription={openedVaults.map((item) => `${item.vault.name}（${item.vault.path}）`).join("、")} openedVaultPaths={openedVaults.map((item) => item.vault.path)} vaultPath={vault.path} onNotice={onNotice} isAdmin={canEdit} onVaultActivity={onVaultActivity} /></div> : !activeBook && activeTab === "compare" ? <div className="content-view compare"><CompareViewPanel vaultPath={vault.path} onNotice={onNotice} canEdit={canEdit} bookOrder={bookOrder} /></div> : !activeBook && activeTab === "returnGifts" ? <div className="content-view returnGifts"><ReturnGiftsView vaultPath={vault.path} isAdmin={canEdit} onError={onError} onVaultActivity={onVaultActivity} /></div> : !activeBook && activeTab === "history" ? <div className="content-view history"><HistoryView vaultPath={vault.path} vaultName={vault.name} isAdmin={canEdit} onNotice={onNotice} onVaultUpdated={onVaultUpdated} /></div> : activeBook ? (
              <>
-               {showBookNavigation && <><div className="content-heading"><div><h2>{activeBook.title}{canEdit && <button className="icon-button subtle book-title-edit" data-operation-hint="提示：仅修改礼金簿名称、活动信息和备注。" type="button" title="编辑礼金簿" aria-label="编辑礼金簿" onClick={() => setBookEditOpen(true)}><Pencil size={16} /></button>}</h2><BookMetadata book={activeBook} vaultPath={vault.path} /></div><div className="heading-actions" /></div>
-               <nav className="tab-bar"><button className={activeTab === "entries" ? "active" : ""} onClick={() => setActiveTab("entries")}><LayoutDashboard size={16} />礼金明细</button><button className={activeTab === "people" ? "active" : ""} onClick={() => setActiveTab("people")}><UsersRound size={16} />人物与标签</button><button className={activeTab === "compare" ? "active" : ""} onClick={() => setActiveTab("compare")}><BarChart3 size={16} />跨簿比较</button></nav></>}
+               {showBookNavigation && <><div className="content-heading"><div><h2>{activeBook.title}{canEdit && <button className="icon-button subtle book-title-edit" data-operation-hint="提示：仅修改礼金簿名称、活动信息和备注。" type="button" title="编辑礼金簿" aria-label="编辑礼金簿" onClick={() => { if (canLeaveWorkspace()) setBookEditTarget({ ...activeBook }); }}><Pencil size={16} /></button>}</h2><BookMetadata book={activeBook} vaultPath={vault.path} /></div><div className="heading-actions" /></div>
+               <nav className="tab-bar"><button className={activeTab === "entries" ? "active" : ""} onClick={() => selectTab("entries")}><LayoutDashboard size={16} />礼金明细</button><button className={activeTab === "people" ? "active" : ""} onClick={() => selectTab("people")}><UsersRound size={16} />人物与标签</button><button className={activeTab === "compare" ? "active" : ""} onClick={() => selectTab("compare")}><BarChart3 size={16} />跨簿比较</button></nav></>}
               <div className={`content-view ${activeTab}`}>
                 {activeTab === "trash" && <TrashView scopeDescription={openedVaults.map((item) => `${item.vault.name}（${item.vault.path}）`).join("、")} openedVaultPaths={openedVaults.map((item) => item.vault.path)} vaultPath={vault.path} onNotice={onNotice} isAdmin={canEdit} onVaultActivity={onVaultActivity} />}
                 {activeTab === "entries" && <EntriesView key={activeBook.id} book={activeBook} vaultPath={vault.path} onError={onError} onNotice={onNotice} isAdmin={isAdmin} editLocked={session.editLocked} continuousRegistration={continuousRegistration} onStopContinuousRegistration={() => onContinuousRegistrationChange(false)} onUnlockEditing={onUnlockEditing} onLockEditing={onLockEditing} focusedEntryId={focusedEntryId} onExportVault={exportVault} onEditVault={() => setVaultEditOpen(true)} onVaultActivity={onVaultActivity} />}
@@ -1336,9 +1354,9 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
       </div>
       {bookModal && <BookModal error={createBook.error} onClose={() => setBookModal(false)} onSubmit={(input) => createBook.mutate(input)} isSaving={createBook.isPending} />}
       {vaultEditOpen && <VaultMetadataModal error={vaultEditError} vault={vault} isSaving={vaultEditSaving} onClose={() => setVaultEditOpen(false)} onSubmit={editVault} />}
-      {bookEditOpen && activeBook && <BookMetadataModal error={bookEditError} book={activeBook} isSaving={bookEditSaving} onClose={() => setBookEditOpen(false)} onSubmit={editBook} />}
+      {bookEditTarget && <BookMetadataModal key={bookEditTarget.id} error={bookEditError} book={bookEditTarget} isSaving={bookEditSaving} onClose={() => setBookEditTarget(null)} onSubmit={editBook} />}
       {bookToClose && <ConfirmBookClose book={bookToClose} onClose={() => setBookToClose(null)} onConfirm={confirmCloseBook} />}
-      {spreadsheetImportOpen && <SpreadsheetBatchModal error={importError} targetQuery={openedVaultBooks} paths={spreadsheetPaths} books={openedVaultBooks.data ?? []} vaults={openedVaults.map((item) => item.vault)} activeVaultPath={vault.path} activeBookId={activeBookId} isImporting={spreadsheetImporting} importPhase={spreadsheetImportPhase} onClose={() => { setSpreadsheetImportOpen(false); setSpreadsheetPaths([]); }} onChooseMore={async () => { try { const paths = await api.chooseSpreadsheetPaths(); const vaultCount = paths.filter((path) => path.toLocaleLowerCase().endsWith(".giftvault")).length; if (vaultCount) onNotice(`已跳过 ${vaultCount} 个礼金库文件，请使用“打开礼金库”切换礼金库`); return paths.filter((path) => !path.toLocaleLowerCase().endsWith(".giftvault")); } catch (err) { onError(String(err)); return []; } }} onImport={async (items) => { setImportError(null); setSpreadsheetImporting(true); setSpreadsheetImportPhase("正在写入礼金簿"); try { const result = await api.importSpreadsheets(items); setSpreadsheetImportPhase("正在刷新页面数据"); await Promise.all(uniquePaths(items.map((item) => item.targetVaultPath || vault.path)).map((path) => invalidateVaultQueries(client, path))); setSpreadsheetImportOpen(false); setSpreadsheetPaths([]); if (result.books[0]) { if (items[0]?.targetVaultPath && vaultPathKey(items[0].targetVaultPath) !== vaultPathKey(vault.path)) await onOpenSearchVault(items[0].targetVaultPath, result.books[0].book.id, null, true); else { setActiveBookId(result.books[0].book.id); setActiveTab("entries"); onVaultActivity(); } } onNotice(result.skippedRows.length ? `已导入 ${result.imported} 条记录；跳过 ${result.skippedRows.length} 行。${result.skippedRows.slice(0, 3).join("；")}${result.skippedRows.length > 3 ? "；其余异常请在导入预览中查看" : ""}` : `已从 ${result.books.length} 个文件导入 ${result.imported} 条记录`); } catch (err) { setImportError(err); onError(String(err)); } finally { setSpreadsheetImporting(false); setSpreadsheetImportPhase("正在准备导入"); } }} />}
+      {spreadsheetImportOpen && <SpreadsheetBatchModal error={importError} targetQuery={openedVaultBooks} paths={spreadsheetPaths} books={openedVaultBooks.data ?? []} vaults={openedVaults.map((item) => item.vault)} activeVaultPath={vault.path} activeBookId={activeBookId} isImporting={spreadsheetImporting} importPhase={spreadsheetImportPhase} onClose={() => { setSpreadsheetImportOpen(false); setSpreadsheetPaths([]); }} onChooseMore={async () => { try { const paths = await api.chooseSpreadsheetPaths(); const vaultCount = paths.filter((path) => path.toLocaleLowerCase().endsWith(".giftvault")).length; if (vaultCount) onNotice(`已跳过 ${vaultCount} 个礼金库文件，请使用“打开礼金库”切换礼金库`); return paths.filter((path) => !path.toLocaleLowerCase().endsWith(".giftvault")); } catch (err) { onError(String(err)); return []; } }} onImport={async (items) => { setImportError(null); setSpreadsheetImporting(true); setSpreadsheetImportPhase("正在写入礼金簿"); try { const result = await api.importSpreadsheets(items); setSpreadsheetImportPhase("正在刷新页面数据"); await Promise.all(uniquePaths(items.map((item) => item.targetVaultPath || vault.path)).map((path) => invalidateVaultQueries(client, path))); if (!api.isCurrent()) return; const completedForm = document.querySelector<HTMLElement>('[data-modal-owner="spreadsheet-import"]'); setSpreadsheetImportOpen(false); setSpreadsheetPaths([]); if (!canLeaveWorkspace(completedForm)) { onNotice(`已导入 ${result.imported} 条记录，当前草稿仍保留；请完成当前操作后打开导入目标。`); return; } if (result.books[0]) { if (items[0]?.targetVaultPath && vaultPathKey(items[0].targetVaultPath) !== vaultPathKey(vault.path)) await onOpenSearchVault(items[0].targetVaultPath, result.books[0].book.id, null, completedForm); else { setActiveBookId(result.books[0].book.id); setActiveTab("entries"); onVaultActivity(); } } onNotice(result.skippedRows.length ? `已导入 ${result.imported} 条记录；跳过 ${result.skippedRows.length} 行。${result.skippedRows.slice(0, 3).join("；")}${result.skippedRows.length > 3 ? "；其余异常请在导入预览中查看" : ""}` : `已从 ${result.books.length} 个文件导入 ${result.imported} 条记录`); } catch (err) { setImportError(err); onError(String(err)); } finally { setSpreadsheetImporting(false); setSpreadsheetImportPhase("正在准备导入"); } }} />}
     </div>
   );
 }
@@ -1418,8 +1436,8 @@ function EntriesView({ book, vaultPath, onError, onNotice, isAdmin, editLocked, 
   const [sort, setSort] = useState<EntrySort>(null);
   const queryEntries = useQuery({ queryKey: ["entries", vaultPath, book.id], queryFn: () => api.listEntries(book.id, "") });
   const tags = useQuery({ queryKey: ["tags", vaultPath], queryFn: api.listTags });
-  const createTag = useMutation({ mutationFn: ({ name, color }: { name: string; color: string }) => api.createTag(name, color), onSuccess: () => { invalidateVaultQueries(client, vaultPath); onVaultActivity(); }, onError: (err) => onError(String(err)) });
-  const deleteEntry = useMutation({ mutationFn: api.deleteEntry, onSuccess: () => { invalidateVaultQueries(client, vaultPath); onVaultActivity(); }, onError: (err) => onError(String(err)) });
+  const createTag = useMutation({ mutationFn: ({ name, color }: { name: string; color: string }) => api.createTag(name, color), onSuccess: () => { invalidateVaultQueries(client, vaultPath); if (!api.isCurrent()) return; onVaultActivity(); }, onError: (err) => onError(String(err)) });
+  const deleteEntry = useMutation({ mutationFn: api.deleteEntry, onSuccess: () => { invalidateVaultQueries(client, vaultPath); if (!api.isCurrent()) return; onVaultActivity(); }, onError: (err) => onError(String(err)) });
   const entries = queryEntries;
   const displayTags = canonicalizeTags(tags.data ?? []);
   const tagById = new Map(displayTags.map((tag) => [tag.id, tag]));
@@ -1468,8 +1486,8 @@ function EntriesView({ book, vaultPath, onError, onNotice, isAdmin, editLocked, 
     document.addEventListener("pointerdown", closeSortOnOutsidePointer);
     return () => document.removeEventListener("pointerdown", closeSortOnOutsidePointer);
   }, []);
-  const createEntry = useMutation({ mutationFn: (input: EntryDraft) => api.createEntry({ bookId: book.id, ...input }), onSuccess: () => { invalidateVaultQueries(client, vaultPath); onVaultActivity(); if (continuousRegistration) { setEntryFormKey((key) => key + 1); setEntryModal(true); onNotice("登记成功，请继续登记下一条礼金"); } else { setEntryModal(false); } }, onError: (err) => onError(String(err)) });
-  const updateEntry = useMutation({ mutationFn: (input: EntryDraft & { entryId: string }) => api.updateEntry(input), onSuccess: () => { invalidateVaultQueries(client, vaultPath); setEditingEntry(null); onVaultActivity(); }, onError: (err) => onError(String(err)) });
+  const createEntry = useMutation({ mutationFn: (input: EntryDraft) => api.createEntry({ bookId: book.id, ...input }), onSuccess: () => { invalidateVaultQueries(client, vaultPath); if (!api.isCurrent()) return; onVaultActivity(); if (continuousRegistration) { setEntryFormKey((key) => key + 1); setEntryModal(true); onNotice("登记成功，请继续登记下一条礼金"); } else { setEntryModal(false); } }, onError: (err) => onError(String(err)) });
+  const updateEntry = useMutation({ mutationFn: (input: EntryDraft & { entryId: string }) => api.updateEntry(input), onSuccess: () => { invalidateVaultQueries(client, vaultPath); if (!api.isCurrent()) return; setEditingEntry(null); onVaultActivity(); }, onError: (err) => onError(String(err)) });
   useEffect(() => {
     if (!focusedEntryId || !queryEntries.data?.some((entry) => entry.id === focusedEntryId)) return;
     document.getElementById(`entry-${focusedEntryId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -1633,7 +1651,7 @@ function SpreadsheetBatchModal({ error, paths, targetQuery, books, vaults, activ
     if (targetQuery.isPending || targetQuery.isError || targetQuery.isFetching || isImporting || hasBlockingItem || !validItems.length) return;
     onImport(validItems.map((item) => ({ path: item.path, sheetName: item.sheetName ?? undefined, headerRow: item.headerRow ?? undefined, mapping: item.mapping ?? undefined, bookName: item.bookName.trim() || item.preview?.fileName.replace(/\.[^.]+$/, "") || "导入礼金簿", targetBookId: targetBookId === "__new__" ? null : targetBookId, targetVaultPath, createNewBook: targetBookId === "__new__" })));
   };
-  return <Modal title={`批量导入表格 · ${items.length} 个文件`} onClose={onClose} isSaving={isImporting} error={error} className="spreadsheet-batch-modal">
+  return <Modal title={`批量导入表格 · ${items.length} 个文件`} onClose={onClose} isSaving={isImporting} error={error} className="spreadsheet-batch-modal" owner="spreadsheet-import">
     <QueryFeedback query={targetQuery} label="导入目标礼金簿" />
     <div className="batch-import-intro"><FileSpreadsheet size={16} /><div><strong>导入提醒</strong><span>系统会先检查字段映射和异常记录，确认无误后才写入目标礼金库。</span><small>姓名、金额为必填字段；例如“第 1 列：姓名”应对应姓名，“第 2 列：金额”应对应礼金金额。地址、支付方式和备注识别错误时，请在下方重新选择；红色异常会显示具体行号和处理建议。</small></div></div>
     <div className="batch-import-toolbar"><div className="batch-target-fields"><label className="batch-target-vault">导入礼金库<select value={targetVaultPath} aria-label="导入礼金库" onChange={(event) => { setTargetVaultPath(event.target.value); setTargetBookId("__new__"); }}>{vaults.map((item) => <option value={item.path} key={item.path}>{item.name}</option>)}</select><small>默认使用当前礼金库；切换后，文件会写入所选礼金库。</small></label><label className="batch-target-book">导入方式<select value={targetBookId} aria-label="导入方式" data-target-mode="明确新建礼金簿" onChange={(event) => setTargetBookId(event.target.value)}><option value="__new__">新建礼金簿</option>{targetBooks.map((book) => <option value={book.id} key={book.id}>{book.title}</option>)}</select><small>已有礼金簿只追加导入记录，不覆盖原有数据。</small></label></div><button className="secondary-button compact" onClick={() => void addFiles()} disabled={isImporting}><FolderOpen size={14} />添加文件</button></div>
@@ -1675,25 +1693,25 @@ function PeopleView({ vaultPath, bookId, onError, isAdmin, editLocked, onVaultAc
     onSuccess: (tag) => {
       const [createdTag] = canonicalizeTags([tag]);
       client.setQueryData<Tag[]>(["tags", vaultPath], (current) => [...(current ?? []), createdTag]);
-      setNewTag("");
       refreshTagConsumers();
-      onVaultActivity();
+      if (!api.isCurrent()) return;
+      setNewTag(""); onVaultActivity();
     },
     onError: (err) => onError(String(err)),
   });
   const updateTagColor = useMutation({
     mutationFn: ({ tagId, color }: { tagId: string; color: string }) => api.updateTagColor(tagId, color),
-    onSuccess: () => { refreshTagConsumers(); onVaultActivity(); },
+    onSuccess: () => { refreshTagConsumers(); if (api.isCurrent()) onVaultActivity(); },
     onError: (err) => onError(String(err)),
   });
   const deleteTag = useMutation({
     mutationFn: api.deleteTag,
-    onSuccess: () => { refreshTagConsumers(); onVaultActivity(); },
+    onSuccess: () => { refreshTagConsumers(); if (api.isCurrent()) onVaultActivity(); },
     onError: (err) => onError(String(err)),
   });
   const setPersonTags = useMutation({
     mutationFn: ({ personId, tagIds }: { personId: string; tagIds: string[] }) => api.setPersonTags(personId, tagIds),
-    onSuccess: () => { refreshTagConsumers(); onVaultActivity(); },
+    onSuccess: () => { refreshTagConsumers(); if (api.isCurrent()) onVaultActivity(); },
     onError: (err) => onError(String(err)),
   });
   const searchLabel = tagSearch.trim() ? `标签“${tagSearch.trim()}”` : "当前礼金簿";
@@ -1765,19 +1783,24 @@ function HistoryView({ vaultPath, vaultName, isAdmin, onNotice, onVaultUpdated }
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
   const history = useQuery({ queryKey: ["audit-logs", vaultPath], queryFn: api.listAuditLogs });
-  const refreshWorkspace = async () => {
+  const refreshWorkspace = async (completed = false) => {
     await invalidateVaultQueries(client, vaultPath);
-    onVaultUpdated(await api.currentVaultInfo());
-    await history.refetch();
+    if (!api.isCurrent()) return;
+    try {
+      const updated = await api.currentVaultInfo();
+      if (!api.isCurrent()) return;
+      onVaultUpdated(updated);
+      await history.refetch();
+    } catch (error) { if (completed && api.isCurrent()) onNotice(`数据操作已完成，刷新失败：${String(error)}`); }
   };
   const clearHistory = useMutation({
     mutationFn: async (records: AuditLog[]) => { await api.clearAuditLogs(records.map((record) => record.id)); return records; },
-    onSuccess: async (records) => { await refreshWorkspace(); setSelectedHistoryIds(new Set()); setSelectionMode(false); setClearOpen(false); onNotice(`删除成功：${historyTargets(records)}`); },
+    onSuccess: async (records) => { await refreshWorkspace(true); if (!api.isCurrent()) return; setSelectedHistoryIds(new Set()); setSelectionMode(false); setClearOpen(false); onNotice(`删除成功：${historyTargets(records)}`); },
     onError: (error) => { void refreshWorkspace().catch(() => undefined); onNotice(`删除失败：${String(error).replace(/^Error:\s*/, "")}`); },
   });
   const restoreHistory = useMutation({
     mutationFn: async (records: AuditLog[]) => { await api.restoreAuditLogs(records.map((record) => record.id)); return records; },
-    onSuccess: async (records) => { await refreshWorkspace(); setSelectedHistoryIds(new Set()); setSelectionMode(false); onNotice(`恢复成功：${historyTargets(records)}`); },
+    onSuccess: async (records) => { await refreshWorkspace(true); if (!api.isCurrent()) return; setSelectedHistoryIds(new Set()); setSelectionMode(false); onNotice(`恢复成功：${historyTargets(records)}`); },
     onError: (error) => { void refreshWorkspace().catch(() => undefined); onNotice(`恢复失败：${String(error).replace(/^Error:\s*/, "")}`); },
   });
   const displayTime = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
@@ -1815,6 +1838,7 @@ function ReturnGiftsView({ vaultPath, isAdmin, onError, onVaultActivity }: { vau
     mutationFn: ({ entryId, amountFen, returnGift }: { entryId: string; amountFen: number; returnGift: string }) => api.updateReturnGiftInformation(entryId, amountFen, returnGift),
     onSuccess: () => {
       void invalidateVaultQueries(client, vaultPath);
+      if (!api.isCurrent()) return;
       setEditingRecord(null);
       onVaultActivity();
     },
@@ -1860,6 +1884,7 @@ function TrashView({ scopeDescription, openedVaultPaths, vaultPath, onNotice, is
     },
     onSuccess: (items) => {
       refreshRelatedViews();
+      if (!api.isCurrent()) return;
       setSelectedTrashKeys(new Set());
       setSelectionMode(false);
       onVaultActivity();
@@ -1870,7 +1895,7 @@ function TrashView({ scopeDescription, openedVaultPaths, vaultPath, onNotice, is
       onNotice(`恢复失败：${trashTargets(items)}，${String(err).replace(/^Error:\s*/, "")}`);
     },
   });
-  const empty = useMutation({ mutationFn: api.emptyTrash, onSuccess: () => { refreshRelatedViews(); setClearOpen(false); onVaultActivity(); onNotice("清空回收站成功"); }, onError: (err) => { refreshRelatedViews(); onNotice(`清空回收站失败：${String(err).replace(/^Error:\s*/, "")}`); } });
+  const empty = useMutation({ mutationFn: api.emptyTrash, onSuccess: () => { refreshRelatedViews(); if (!api.isCurrent()) return; setClearOpen(false); onVaultActivity(); onNotice("清空回收站成功"); }, onError: (err) => { refreshRelatedViews(); onNotice(`清空回收站失败：${String(err).replace(/^Error:\s*/, "")}`); } });
   const toggleTrashItem = (item: TrashItem) => setSelectedTrashKeys((current) => {
     const next = new Set(current);
     const key = trashItemKey(item);
@@ -1921,7 +1946,7 @@ function EmptyBookState({ onCreate }: { onCreate: () => void }) { return <div cl
 
 function Metric({ label, value, detail, accent }: { label: string; value: string; detail?: string | null; accent: string }) { return <div className={`metric-card ${accent}`}><span>{label}</span><strong>{value}</strong>{detail && <small>{detail}</small>}</div>; }
 
-function BookModal({ error, onClose, onSubmit, isSaving }: { error: unknown; onClose: () => void; onSubmit: (input: { title: string; occasion: string; eventDate: string; location: string; notes: string }) => void; isSaving: boolean }) { const [title, setTitle] = useState(""); const [occasion, setOccasion] = useState("婚礼"); const [eventDate, setEventDate] = useState(today()); const [location, setLocation] = useState(""); const [notes, setNotes] = useState(""); const validationError = validateChangedText("礼金簿名称", title, 256) || validateChangedText("活动类型", occasion, 256) || validateChangedText("地点", location, 4096) || validateChangedText("备注", notes, 65536) || validateChangedDate(eventDate); return <Modal title="新建礼金簿" onClose={onClose} isSaving={isSaving} error={error || validationError}><label>礼金簿名称<input autoFocus placeholder="例如：2026 年春节走亲" value={title} onChange={(event) => setTitle(event.target.value)} /></label><div className="form-grid"><label>活动类型<input value={occasion} onChange={(event) => setOccasion(event.target.value)} /></label><label>活动日期<input type="date" value={eventDate} onChange={(event) => setEventDate(event.target.value)} /></label></div><label>地点<input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="可选" /></label><label>备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="可选" /></label><div className="modal-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={!title.trim() || Boolean(validationError) || isSaving} onClick={() => onSubmit({ title: title.trim(), occasion, eventDate, location, notes })}>{isSaving ? "创建中…" : "创建礼金簿"}</button></div></Modal>; }
+function BookModal({ error, onClose, onSubmit, isSaving }: { error: unknown; onClose: () => void; onSubmit: (input: { title: string; occasion: string; eventDate: string; location: string; notes: string }) => void; isSaving: boolean }) { const [title, setTitle] = useState(""); const [occasion, setOccasion] = useState("婚礼"); const [eventDate, setEventDate] = useState(today()); const [location, setLocation] = useState(""); const [notes, setNotes] = useState(""); const validationError = validateChangedText("礼金簿名称", title, 256) || validateChangedText("活动类型", occasion, 256) || validateChangedText("地点", location, 4096) || validateChangedText("备注", notes, 65536) || validateChangedDate(eventDate); return <Modal title="新建礼金簿" owner="create-book" onClose={onClose} isSaving={isSaving} error={error || validationError}><label>礼金簿名称<input autoFocus placeholder="例如：2026 年春节走亲" value={title} onChange={(event) => setTitle(event.target.value)} /></label><div className="form-grid"><label>活动类型<input value={occasion} onChange={(event) => setOccasion(event.target.value)} /></label><label>活动日期<input type="date" value={eventDate} onChange={(event) => setEventDate(event.target.value)} /></label></div><label>地点<input value={location} onChange={(event) => setLocation(event.target.value)} placeholder="可选" /></label><label>备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="可选" /></label><div className="modal-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={!title.trim() || Boolean(validationError) || isSaving} onClick={() => onSubmit({ title: title.trim(), occasion, eventDate, location, notes })}>{isSaving ? "创建中…" : "创建礼金簿"}</button></div></Modal>; }
 
 function BookMetadataModal({ error, book, onClose, onSubmit, isSaving }: { error: unknown; book: GiftBook; onClose: () => void; onSubmit: (input: { title: string; occasion: string; eventDate: string; location: string; notes: string }) => void; isSaving: boolean }) {
   const [title, setTitle] = useState(book.title);
@@ -1999,6 +2024,7 @@ function EntryModal({ onClose, onSubmit, isSaving, tagsReady, error, tagsError, 
     setTagSaving(true); setTagError(null);
     try {
       const tag = await onCreateTag(name, newTagColor);
+      if (!api.isCurrent()) return true;
       setNewTag("");
       const nextTags = mergeEntryTag(availableTags, tag);
       setCreatedTags((current) => mergeEntryTag(current, tag));
@@ -2101,7 +2127,7 @@ function ConfirmBookClose({ book, onClose, onConfirm }: { book: GiftBook; onClos
 }
 
 function ConfirmHistoryClear({ selectedCount, isClearing, onClose, onConfirm }: { selectedCount: number; isClearing: boolean; onClose: () => void; onConfirm: () => void }) {
-  return <Modal title="删除历史改动" onClose={onClose}><p className="field-hint">{selectedCount > 0 ? `将删除已选中的 ${selectedCount} 条历史改动记录，删除后无法恢复。` : "未选择具体记录，将删除全部历史改动记录。删除后无法恢复。"}</p><div className="modal-actions"><button className="secondary-button" disabled={isClearing} onClick={onClose}>取消</button><button className="danger-button" disabled={isClearing} onClick={onConfirm}>{isClearing ? "正在删除…" : selectedCount > 0 ? "删除选中记录" : "删除全部记录"}</button></div></Modal>;
+  return <Modal title="删除历史改动" onClose={onClose} isSaving={isClearing}><p className="field-hint">{selectedCount > 0 ? `将删除已选中的 ${selectedCount} 条历史改动记录，删除后无法恢复。` : "未选择具体记录，将删除全部历史改动记录。删除后无法恢复。"}</p><div className="modal-actions"><button className="secondary-button" disabled={isClearing} onClick={onClose}>取消</button><button className="danger-button" disabled={isClearing} onClick={onConfirm}>{isClearing ? "正在删除…" : selectedCount > 0 ? "删除选中记录" : "删除全部记录"}</button></div></Modal>;
 }
 
 function submitTrashEmptyPin(event: React.KeyboardEvent<HTMLInputElement>, valid: boolean, isClearing: boolean, pin: string, onConfirm: (pin: string) => void) {
@@ -2116,13 +2142,13 @@ function ConfirmTrashEmpty({ error, scopeDescription, isClearing, onClose, onCon
   return <Modal title="清空回收站" onClose={onClose} isSaving={isClearing} error={error}><p className="field-hint">本次清空范围：{scopeDescription}。包含这些已打开礼金库的回收站项目，以及全局已删除礼金库文件，永久删除后无法恢复。请输入管理员 PIN 继续。</p><label>管理员 PIN<input autoFocus type="password" inputMode="numeric" value={pin} onChange={(event) => setPin(event.target.value)} onKeyDown={(event) => submitTrashEmptyPin(event, valid, isClearing, pin, onConfirm)} placeholder="6 至 12 位数字" /></label><div className="modal-actions"><button className="secondary-button" disabled={isClearing} onClick={onClose}>取消</button><button type="button" className="danger-button" disabled={!valid || isClearing} onClick={() => onConfirm(pin)}>{isClearing ? "正在清空…" : "永久清空"}</button></div></Modal>;
 }
 
-function canLeaveWorkspace() {
-  if (document.querySelector('[data-modal-saving="true"]')) return false;
-  const modal = document.querySelector<HTMLElement>('[data-modal-dirty="true"]');
-  return !modal || allowFormClose(modal.dataset.modalDirty === "true", modal.dataset.modalSaving === "true", () => window.confirm("尚有未保存内容，是否放弃修改？"));
+function canLeaveWorkspace(completedForm: HTMLElement | null = null) {
+  const modals = Array.from(document.querySelectorAll<HTMLElement>('[data-modal-saving="true"], [data-modal-dirty="true"]')).filter((modal) => modal !== completedForm);
+  if (modals.some((modal) => modal.dataset.modalSaving === "true")) return false;
+  return !modals.some((modal) => modal.dataset.modalDirty === "true") || window.confirm("尚有未保存内容，是否放弃修改？");
 }
 
-function Modal({ title, onClose, children, className = "", isSaving = false, error }: { title: string; onClose: () => void; children: React.ReactNode; className?: string; isSaving?: boolean; error?: unknown }) {
+function Modal({ title, onClose, children, className = "", isSaving = false, error, owner }: { title: string; onClose: () => void; children: React.ReactNode; className?: string; isSaving?: boolean; error?: unknown; owner?: string }) {
   const [dirty, setDirty] = useState(false);
   const requestClose = () => { if (allowFormClose(dirty, isSaving, () => window.confirm("尚有未保存内容，是否放弃修改？"))) onClose(); };
   useEffect(() => {
@@ -2130,7 +2156,7 @@ function Modal({ title, onClose, children, className = "", isSaving = false, err
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, [dirty, isSaving, onClose]);
-  return <div className="modal-backdrop" data-modal-dirty={dirty} data-modal-saving={isSaving} onChangeCapture={() => setDirty(true)} onClickCapture={(event) => {
+  return <div className="modal-backdrop" data-modal-dirty={dirty} data-modal-saving={isSaving} data-modal-owner={owner} onChangeCapture={() => setDirty(true)} onClickCapture={(event) => {
     const button = (event.target as HTMLElement).closest("button");
     if (button?.hasAttribute("aria-pressed")) setDirty(true);
     if (button?.textContent?.trim() === "取消" && !allowFormClose(dirty, isSaving, () => window.confirm("尚有未保存内容，是否放弃修改？"))) { event.preventDefault(); event.stopPropagation(); }
