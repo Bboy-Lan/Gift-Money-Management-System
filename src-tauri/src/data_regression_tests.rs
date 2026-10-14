@@ -243,6 +243,139 @@ fn edit_input() -> UpdateEntryInput {
     }
 }
 
+fn tagged_database() -> Connection {
+    let c = database();
+    for id in ["a", "b", "c"] {
+        c.execute(
+            "INSERT INTO tags(id,name,color,created_at) VALUES (?,?,'#000000','now')",
+            params![id, id],
+        )
+        .unwrap();
+    }
+    c.execute(
+        "INSERT INTO person_tags(person_id,tag_id) VALUES ('p','a')",
+        [],
+    )
+    .unwrap();
+    c
+}
+
+fn tag_then_rename(c: &mut Connection) -> (String, String) {
+    let mut input = edit_input();
+    input.tag_ids = vec!["b".into()];
+    update_entry_record(input, c, "fixture").unwrap();
+    let raw: String = c
+        .query_row(
+            "SELECT payload FROM audit_logs ORDER BY rowid DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let saved: AuditPayload = serde_json::from_str(&raw).unwrap();
+    assert_eq!(saved.person_id.as_deref(), Some("p"));
+    let saved: AuditPayload =
+        serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+    assert_eq!(saved.person_id.as_deref(), Some("p"));
+    let old_id = c
+        .query_row(
+            "SELECT id FROM audit_logs ORDER BY rowid DESC LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let mut input = edit_input();
+    input.person_name = "renamed".into();
+    input.address = "new address".into();
+    input.tag_ids = vec!["c".into()];
+    update_entry_record(input, c, "fixture").unwrap();
+    let current = c
+        .query_row("SELECT person_id FROM gift_entries WHERE id='e'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    (old_id, current)
+}
+
+#[test]
+fn tag_audit_identity_drift_rejects_restore_and_retains_both_people_and_history() {
+    let mut c = tagged_database();
+    let (old_id, current) = tag_then_rename(&mut c);
+    let result = restore_selected_audit_records(&mut c, std::slice::from_ref(&old_id));
+    assert!(
+        result.is_err(),
+        "older tag audit must reject changed identity"
+    );
+    assert_eq!(active_person_tag_ids(&c, "p").unwrap(), vec!["b"]);
+    assert_eq!(active_person_tag_ids(&c, &current).unwrap(), vec!["c"]);
+    assert_eq!(
+        c.query_row("SELECT person_id FROM gift_entries WHERE id='e'", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        current
+    );
+    assert_eq!(
+        c.query_row(
+            "SELECT COUNT(*) FROM audit_logs WHERE id=?",
+            params![old_id],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1
+    );
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM audit_logs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn tag_audit_identity_drift_is_unreversible_with_specific_reason() {
+    let mut c = tagged_database();
+    let (old_id, _) = tag_then_rename(&mut c);
+    let logs = list_audit_logs_from_connection(&c).unwrap();
+    let old = logs.iter().find(|log| log.id == old_id).unwrap();
+    assert!(!old.reversible);
+    assert!(old
+        .reversible_reason
+        .as_deref()
+        .unwrap()
+        .contains("人物关联"));
+}
+
+#[test]
+fn tag_audit_combined_identity_change_relinks_then_restores_original_tags() {
+    let mut c = tagged_database();
+    let mut input = edit_input();
+    input.person_name = "renamed".into();
+    input.address = "new address".into();
+    input.tag_ids = vec!["b".into()];
+    update_entry_record(input, &mut c, "fixture").unwrap();
+    let current: String = c
+        .query_row("SELECT person_id FROM gift_entries WHERE id='e'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    let logs = list_audit_logs_from_connection(&c).unwrap();
+    assert!(logs[0].reversible);
+    restore_selected_audit_records(&mut c, &[logs[0].id.clone()]).unwrap();
+    assert_eq!(
+        c.query_row("SELECT person_id FROM gift_entries WHERE id='e'", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        "p"
+    );
+    assert_eq!(active_person_tag_ids(&c, "p").unwrap(), vec!["a"]);
+    assert_eq!(active_person_tag_ids(&c, &current).unwrap(), vec!["b"]);
+    assert_eq!(
+        c.query_row("SELECT COUNT(*) FROM audit_logs", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
 #[test]
 fn editing_replaces_tags_with_audited_full_set_and_can_restore() {
     let mut c = database();

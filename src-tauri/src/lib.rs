@@ -869,6 +869,8 @@ fn write_audit(
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AuditPayload {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    person_id: Option<String>,
     target: String,
     book_title: Option<String>,
     description: String,
@@ -2485,6 +2487,7 @@ fn edit_vault(
             "vault",
             &vault_id,
             AuditPayload {
+                person_id: None,
                 target: next_name,
                 book_title: None,
                 description: "编辑礼金库信息".to_string(),
@@ -2799,6 +2802,7 @@ fn create_book(
         "gift_book",
         &id,
         AuditPayload {
+            person_id: None,
             target: title.trim().to_string(),
             book_title: Some(title.trim().to_string()),
             description: "新建礼金簿".to_string(),
@@ -2948,6 +2952,7 @@ fn edit_book(
             "gift_book",
             &book_id,
             AuditPayload {
+                person_id: None,
                 target: title.clone(),
                 book_title: Some(title.clone()),
                 description: "编辑礼金簿信息".to_string(),
@@ -3000,6 +3005,7 @@ fn restore_book_record(connection: &mut Connection, book_id: &str) -> Result<(),
         "gift_book",
         book_id,
         AuditPayload {
+            person_id: None,
             target: title.clone(),
             book_title: Some(title),
             description: "从回收站恢复".to_string(),
@@ -4537,6 +4543,7 @@ fn import_spreadsheets(
             "gift_book",
             &book_id,
             AuditPayload {
+                person_id: None,
                 target: title.clone(),
                 book_title: Some(title.clone()),
                 description: format!(
@@ -4730,6 +4737,7 @@ fn import_sheet_into_book(
         "gift_book",
         book_id,
         AuditPayload {
+            person_id: None,
             target: book_title.clone(),
             book_title: Some(book_title),
             description: format!("导入文件：{}，新增 {} 条记录", sheet.file_name, imported),
@@ -5338,6 +5346,7 @@ fn update_return_gift_information(
             "gift_entry",
             &entry_id,
             AuditPayload {
+                person_id: None,
                 target: snapshot.person_name.clone(),
                 book_title: Some(snapshot.book_title.clone()),
                 description: "编辑回礼信息".to_string(),
@@ -5698,6 +5707,7 @@ fn update_entry_record(
             "gift_entry",
             &entry_id,
             AuditPayload {
+                person_id: None,
                 target: audit_after.person_name.clone(),
                 book_title: Some(audit_after.book_title.clone()),
                 description: "编辑人物信息".to_string(),
@@ -5752,6 +5762,7 @@ fn delete_entry(
         "gift_entry",
         &entry_id,
         AuditPayload {
+            person_id: None,
             target: snapshot.person_name,
             book_title: Some(snapshot.book_title),
             description: "将人物记录移入回收站".to_string(),
@@ -5786,6 +5797,7 @@ fn restore_entry_record(connection: &mut Connection, entry_id: &str) -> Result<(
         "gift_entry",
         entry_id,
         AuditPayload {
+            person_id: None,
             target: snapshot.person_name,
             book_title: Some(snapshot.book_title),
             description: "从回收站恢复人物记录".to_string(),
@@ -5868,6 +5880,7 @@ fn delete_person(
         "person",
         &person_id,
         AuditPayload {
+            person_id: None,
             target: person_name,
             book_title: book_titles.first().cloned(),
             description: "删除人物并移入回收站".to_string(),
@@ -5916,6 +5929,7 @@ fn restore_person_record(connection: &mut Connection, person_id: &str) -> Result
         "person",
         person_id,
         AuditPayload {
+            person_id: None,
             target: person_name,
             book_title: None,
             description: "从回收站恢复人物及其礼金记录".to_string(),
@@ -6080,6 +6094,7 @@ fn list_audit_logs_from_connection(connection: &Connection) -> Result<Vec<AuditL
                 .as_deref()
                 .and_then(|value| serde_json::from_str::<AuditPayload>(value).ok())
                 .unwrap_or_else(|| AuditPayload {
+                    person_id: None,
                     target: "历史记录".to_string(),
                     book_title: None,
                     description: "历史记录未保存具体变更内容".to_string(),
@@ -6121,7 +6136,18 @@ fn list_audit_logs_from_connection(connection: &Connection) -> Result<Vec<AuditL
                 payload.book_title = Some(audit_person_book_titles(connection, &entity_id)?);
             }
         }
-        logs.push(AuditLog {
+        let tag_identity =
+            if action == "update" && matches!(entity_type.as_str(), "gift_entry" | "return_gift") {
+                audit_entry_tag_target(
+                    connection,
+                    &entity_id,
+                    &payload.changes,
+                    payload.person_id.as_deref(),
+                )
+            } else {
+                Ok(None)
+            };
+        let mut record = AuditLog {
             id,
             entity_id,
             action,
@@ -6133,14 +6159,14 @@ fn list_audit_logs_from_connection(connection: &Connection) -> Result<Vec<AuditL
             created_at,
             reversible: false,
             reversible_reason: None,
-        });
-    }
-    for record in &mut logs {
-        record.reversible = audit_record_is_reversible(connection, record);
+        };
+        record.reversible = tag_identity.is_ok() && audit_record_is_reversible(connection, &record);
         if !record.reversible {
-            record.reversible_reason =
-                Some("目标已删除、缺少依赖或旧快照存在歧义，历史记录已保留".to_string());
+            record.reversible_reason = Some(tag_identity.err().unwrap_or_else(|| {
+                "目标已删除、缺少依赖或旧快照存在歧义，历史记录已保留".to_string()
+            }));
         }
+        logs.push(record);
     }
     Ok(logs)
 }
@@ -6483,6 +6509,62 @@ fn reverse_restore_audit_entity(
     Ok(())
 }
 
+// A tag-only entry audit targets its saved personId. A combined identity/tag
+// edit expects the after identity, but restores tags on the before identity.
+fn audit_entry_tag_target(
+    connection: &Connection,
+    entity_id: &str,
+    changes: &[AuditChange],
+    person_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    if !changes.iter().any(|change| {
+        change
+            .machine
+            .as_ref()
+            .map_or(change.field == "人物标签", |machine| {
+                machine.field_id == "tag_ids"
+            })
+    }) {
+        return Ok(None);
+    }
+    let identity = changes
+        .iter()
+        .filter_map(|change| change.machine.as_ref())
+        .find(|machine| machine.field_id == "person_id");
+    let (target, expected) = if let Some(identity) = identity {
+        if identity.version != 1 {
+            return Err("不支持该历史人物关联快照版本".to_string());
+        }
+        let before = identity.before.as_str().ok_or("历史人物关联无效")?;
+        let after = identity.after.as_str().ok_or("历史人物关联无效")?;
+        if person_id.is_some_and(|saved| saved != after) {
+            return Err("历史人物关联快照不一致，未执行恢复".to_string());
+        }
+        (before, after)
+    } else {
+        let saved = person_id.ok_or("历史缺少稳定人物关联，无法安全恢复标签")?;
+        (saved, saved)
+    };
+    let current: String = connection
+        .query_row(
+            "SELECT person_id FROM gift_entries WHERE id=? AND deleted_at IS NULL",
+            params![entity_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let active: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM people WHERE id=? AND deleted_at IS NULL)",
+            params![target],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    if current != expected || !active {
+        return Err("人物关联已改变或原人物已删除，未执行标签历史恢复；历史记录已保留".to_string());
+    }
+    Ok(Some(target.to_string()))
+}
+
 fn restore_audit_record(
     transaction: &Transaction<'_>,
     entity_type: &str,
@@ -6496,6 +6578,16 @@ fn restore_audit_record(
     if entry_entity {
         ensure_entry_parents_active(transaction, entity_id)?;
     }
+    let tag_target = if entry_entity {
+        audit_entry_tag_target(
+            transaction,
+            entity_id,
+            &payload.changes,
+            payload.person_id.as_deref(),
+        )?
+    } else {
+        None
+    };
     if entry_entity
         && payload.changes.iter().any(|change| {
             change
@@ -6514,7 +6606,13 @@ fn restore_audit_record(
     }
     for change in &payload.changes {
         if let Some(machine) = &change.machine {
-            restore_machine_change(transaction, entity_type, entity_id, machine)?;
+            restore_machine_change(
+                transaction,
+                entity_type,
+                entity_id,
+                machine,
+                tag_target.as_deref(),
+            )?;
             continue;
         }
         let field = change.field.as_str();
@@ -6597,14 +6695,10 @@ fn restore_audit_record(
                 )
                 .map_err(|e| e.to_string())?;
         } else if entry_entity && field.contains("人物标签") {
-            let person_id: String = transaction
-                .query_row(
-                    "SELECT person_id FROM gift_entries WHERE id = ?",
-                    params![entity_id],
-                    |row| row.get(0),
-                )
-                .map_err(|e| e.to_string())?;
-            restore_person_tag_names(transaction, &person_id, &change.before)?;
+            let person_id = tag_target
+                .as_deref()
+                .ok_or("历史缺少稳定人物关联，无法安全恢复标签")?;
+            restore_person_tag_names(transaction, person_id, &change.before)?;
         } else if entry_entity && field.contains("姓名") {
             transaction
                 .execute(
@@ -6666,6 +6760,7 @@ fn restore_machine_change(
     entity_type: &str,
     entity_id: &str,
     change: &AuditMachineChange,
+    tag_target: Option<&str>,
 ) -> Result<(), String> {
     if change.version != 1 {
         return Err("不支持该历史快照版本".to_string());
@@ -6675,13 +6770,9 @@ fn restore_machine_change(
         let person_id = if entity_type == "person" {
             entity_id.to_string()
         } else if entry {
-            transaction
-                .query_row(
-                    "SELECT person_id FROM gift_entries WHERE id=? AND deleted_at IS NULL",
-                    params![entity_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .map_err(|e| e.to_string())?
+            tag_target
+                .ok_or("历史缺少稳定人物关联，无法安全恢复标签")?
+                .to_string()
         } else {
             return Err("标签快照实体无效".to_string());
         };
@@ -6822,8 +6913,15 @@ fn restore_audit_logs(
         return Err("请先进入多选并选择要恢复的历史改动".to_string());
     }
     let mut connection = admin_connection(&state, &vault_path, "restore-audit-logs", false)?;
+    restore_selected_audit_records(&mut connection, &ids)
+}
+
+fn restore_selected_audit_records(
+    connection: &mut Connection,
+    ids: &[String],
+) -> Result<(), String> {
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
-    let rows = audit_restore_rows(&transaction, &ids)?;
+    let rows = audit_restore_rows(&transaction, ids)?;
     if rows.len() != ids.len() {
         return Err("部分历史记录已不存在，未执行恢复".to_string());
     }
@@ -6926,6 +7024,7 @@ fn empty_trash_records(connection: &mut Connection) -> Result<(), String> {
         "trash",
         "all",
         AuditPayload {
+            person_id: None,
             target: "回收站".to_string(),
             book_title: None,
             description: "永久清空回收站".to_string(),
@@ -7060,6 +7159,7 @@ fn create_tag(
         "tag",
         &id,
         AuditPayload {
+            person_id: None,
             target: name.clone(),
             book_title: None,
             description: "新建人物标签".to_string(),
@@ -7105,6 +7205,7 @@ fn delete_tag_record(connection: &mut Connection, tag_id: &str) -> Result<(), St
         "tag",
         tag_id,
         AuditPayload {
+            person_id: None,
             target: tag_name,
             book_title: None,
             description: "删除人物标签并解除人物绑定".to_string(),
@@ -7138,6 +7239,7 @@ fn restore_tag_record(connection: &mut Connection, tag_id: &str) -> Result<(), S
         "tag",
         tag_id,
         AuditPayload {
+            person_id: None,
             target: tag_name,
             book_title: None,
             description: "恢复人物标签".to_string(),
@@ -7179,6 +7281,7 @@ fn update_tag_color(
         "tag",
         &tag_id,
         AuditPayload {
+            person_id: None,
             target: tag_name,
             book_title: None,
             description: "修改人物标签颜色".to_string(),
@@ -7308,6 +7411,7 @@ fn set_person_tags(
             "person",
             &person_id,
             AuditPayload {
+                person_id: None,
                 target: person_name,
                 book_title: Some(book_title),
                 description: "修改人物标签".to_string(),
@@ -9366,6 +9470,7 @@ mod tests {
             "gift_entry",
             "entry-1",
             AuditPayload {
+                person_id: None,
                 target: "张三".to_string(),
                 book_title: Some("测试A".to_string()),
                 description: "编辑人物信息".to_string(),
@@ -9411,6 +9516,7 @@ mod tests {
             "vault",
             "vault-1",
             &AuditPayload {
+                person_id: None,
                 target: "婚礼".to_string(),
                 book_title: None,
                 description: "编辑礼金库信息".to_string(),
@@ -9463,6 +9569,7 @@ mod tests {
             .expect("current vault name");
 
         let oldest_payload = serde_json::to_string(&AuditPayload {
+            person_id: None,
             target: "vault".to_string(),
             book_title: None,
             description: "rename vault".to_string(),
@@ -9470,6 +9577,7 @@ mod tests {
         })
         .expect("oldest payload");
         let newest_payload = serde_json::to_string(&AuditPayload {
+            person_id: None,
             target: "vault".to_string(),
             book_title: None,
             description: "rename vault".to_string(),
@@ -9525,6 +9633,7 @@ mod tests {
             "person",
             "person-1",
             AuditPayload {
+                person_id: None,
                 target: "二狗".to_string(),
                 book_title: Some("测试数据 B".to_string()),
                 description: "修改人物标签".to_string(),
@@ -9568,6 +9677,7 @@ mod tests {
                 "person",
                 "person-1",
                 AuditPayload {
+                    person_id: None,
                     target: "二狗".to_string(),
                     book_title: Some("测试数据 B".to_string()),
                     description: "修改人物标签".to_string(),
@@ -9649,6 +9759,7 @@ mod tests {
             "tag",
             "tag-1",
             AuditPayload {
+                person_id: None,
                 target: "test tag".to_string(),
                 book_title: None,
                 description: "global tag creation".to_string(),
