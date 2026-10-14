@@ -77,6 +77,7 @@ impl AppSecurityStore {
 
     pub fn reset_with_recovery(&self, recovery: &str, new_pin: &str) -> Result<String, String> {
         validate_pin(new_pin)?;
+        validate_recovery(recovery)?;
         let connection = self.open()?;
         let stored: Option<String> = connection
             .query_row(
@@ -107,7 +108,7 @@ impl AppSecurityStore {
         let connection = Connection::open(&self.path).map_err(|error| error.to_string())?;
         connection
             .execute_batch(
-                "PRAGMA journal_mode = WAL;
+                "PRAGMA journal_mode = DELETE;
                  PRAGMA busy_timeout = 5000;
                  CREATE TABLE IF NOT EXISTS app_security (
                    id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -126,6 +127,21 @@ pub fn validate_pin(pin: &str) -> Result<(), String> {
     let pin = pin.trim();
     if !(6..=12).contains(&pin.len()) || !pin.chars().all(|value| value.is_ascii_digit()) {
         return Err("管理员 PIN 必须是 6 至 12 位数字".to_string());
+    }
+    Ok(())
+}
+
+pub fn validate_recovery(recovery: &str) -> Result<(), String> {
+    let groups = recovery.trim().split('-').collect::<Vec<_>>();
+    if groups.len() != 4
+        || groups.iter().any(|group| {
+            group.len() != 6
+                || !group
+                    .bytes()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_lowercase())
+        })
+    {
+        return Err("恢复码格式必须为四组六位大写十六进制字符".to_string());
     }
     Ok(())
 }
@@ -168,8 +184,9 @@ mod tests {
     use super::*;
 
     fn test_store() -> (AppSecurityStore, PathBuf) {
-        let path =
-            std::env::temp_dir().join(format!("lijin-book-security-{}.sqlite", Uuid::new_v4()));
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("lijin-book-security-{}.sqlite", Uuid::new_v4()));
         (AppSecurityStore::new(path.clone()), path)
     }
 
@@ -197,6 +214,16 @@ mod tests {
         assert!(validate_pin("12345").is_err());
         assert!(validate_pin("1234567890123").is_err());
         assert!(validate_pin("abcdef").is_err());
+    }
+
+    #[test]
+    fn recovery_format_is_rejected_before_store_access_or_argon() {
+        let (store, path) = test_store();
+        for code in ["bad", "AAAAAA-AAAAAA-AAAAAA-AAAAAG"] {
+            let error = store.reset_with_recovery(code, "123456").unwrap_err();
+            assert!(error.contains("恢复码格式"), "{error}");
+        }
+        assert!(!path.exists());
     }
 
     #[test]

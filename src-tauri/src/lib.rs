@@ -17,15 +17,31 @@ use uuid::Uuid;
 
 mod app_security;
 mod models;
+mod single_instance;
+mod update_security;
 
 use app_security::{validate_pin, AppSecurityStore};
 use models::*;
 
 const CURRENT_SCHEMA: i32 = 8;
+
+static WRITE_OPERATION: Mutex<()> = Mutex::new(());
+
+fn begin_operation() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    WRITE_OPERATION
+        .lock()
+        .map_err(|_| "写入调度不可用，请重新启动".to_string())
+}
+
+fn with_operation<T>(operation: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    // Includes permission, target capture, migration/snapshot, before-values and commit.
+    let _operation = begin_operation()?;
+    operation()
+}
 const LOGIN_COOLDOWN: Duration = Duration::from_secs(30);
 const MAX_LOGIN_ATTEMPTS: u8 = 5;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const UPDATE_INSTALLER_PREFIX: &str = "礼金簿管理_";
+const UPDATE_INSTALLER_PREFIX: &str = "礼金簿—改动_";
 const GITHUB_UPDATE_INSTALLER_PREFIX: &str = "Gift-Money-Management-System_";
 const UPDATE_INSTALLER_SUFFIX: &str = "_x64-setup.exe";
 const GITHUB_RELEASE_API: &str =
@@ -92,13 +108,6 @@ struct GithubRelease {
     body: Option<String>,
     published_at: Option<String>,
     html_url: Option<String>,
-    assets: Vec<GithubAsset>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
 }
 
 fn now() -> String {
@@ -147,7 +156,7 @@ fn update_runtime_directory() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("礼金簿管理")
+        .join("礼金簿—改动")
         .join("update-runtime")
 }
 
@@ -155,21 +164,20 @@ fn app_security_path() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        // Keep the established secure store so a display-name change never resets an existing PIN.
-        .join("礼金簿")
+        // The isolated variant must never reuse the original credential store.
+        .join("礼金簿—改动")
         .join("admin-security.sqlite")
 }
 
-fn app_settings_path(app: &tauri::AppHandle) -> PathBuf {
-    app.path()
-        .app_config_dir()
-        .unwrap_or_else(|_| {
-            std::env::var_os("LOCALAPPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(std::env::temp_dir)
-                .join("礼金簿管理")
-        })
-        .join("settings.json")
+fn app_profile_directory() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("礼金簿—改动")
+}
+
+fn app_settings_path(_app: &tauri::AppHandle) -> PathBuf {
+    app_profile_directory().join("settings.json")
 }
 
 fn read_app_settings(app: &tauri::AppHandle) -> AppSettings {
@@ -205,8 +213,8 @@ fn installed_application_path() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("礼金簿管理")
-        .join("礼金簿管理.exe")
+        .join("礼金簿—改动")
+        .join("礼金簿—改动.exe")
 }
 
 #[tauri::command]
@@ -214,16 +222,19 @@ fn license_text() -> String {
     include_str!("../../LICENSE").to_string()
 }
 
-fn published_update_directory(app: &tauri::AppHandle) -> PathBuf {
-    desktop_directory(app)
-        .map(|desktop| desktop.join("礼金簿管理系统"))
-        .unwrap_or_else(|| {
-            std::env::var_os("LOCALAPPDATA")
-                .map(PathBuf::from)
-                .unwrap_or_else(std::env::temp_dir)
-                .join("礼金簿管理")
-                .join("updates")
+fn published_update_directory(_app: &tauri::AppHandle) -> PathBuf {
+    // Bound to this executable's distribution, never an original Desktop release.
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .map(|directory| {
+            if directory.file_name().is_some_and(|name| name == "release") {
+                directory
+            } else {
+                directory.join("release")
+            }
         })
+        .unwrap_or_else(|| app_profile_directory().join("release"))
 }
 
 fn ensure_published_update_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -236,7 +247,7 @@ fn comparison_cache_directory() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
-        .join("礼金簿管理")
+        .join("礼金簿—改动")
         .join("comparison-vaults")
 }
 
@@ -252,12 +263,21 @@ fn hidden_windows_command(program: &str) -> Command {
 }
 
 fn parse_release_version(value: &str) -> Option<[u32; 3]> {
-    let parts = value
-        .split('.')
-        .map(str::parse::<u32>)
-        .collect::<Result<Vec<_>, _>>()
-        .ok()?;
-    (parts.len() == 3).then_some([parts[0], parts[1], parts[2]])
+    let parts = value.split('.').collect::<Vec<_>>();
+    if parts.len() != 3
+        || parts.iter().any(|part| {
+            part.is_empty()
+                || !part.bytes().all(|c| c.is_ascii_digit())
+                || (part.len() > 1 && part.starts_with('0'))
+        })
+    {
+        return None;
+    }
+    Some([
+        parts[0].parse().ok()?,
+        parts[1].parse().ok()?,
+        parts[2].parse().ok()?,
+    ])
 }
 
 fn candidate_from_path(path: &Path) -> Option<LocalUpdateCandidate> {
@@ -291,24 +311,14 @@ fn candidate_from_github_release(
         ));
     }
     let file_name = format!("{GITHUB_UPDATE_INSTALLER_PREFIX}{version}{UPDATE_INSTALLER_SUFFIX}");
-    let installer = release
-        .assets
-        .iter()
-        .find(|asset| asset.name == file_name)
-        .ok_or_else(|| format!("GitHub Release 缺少匹配的安装包：{file_name}"))?;
-    let checksum = release
-        .assets
-        .iter()
-        .find(|asset| asset.name.eq_ignore_ascii_case("SHA256SUMS.txt"))
-        .ok_or_else(|| "GitHub Release 缺少 SHA256SUMS.txt，已拒绝更新".to_string())?;
     Ok(Some(LocalUpdateCandidate {
         version: version.to_string(),
         file_name,
         release_notes: release.body.clone(),
         published_at: release.published_at.clone(),
         release_url: release.html_url.clone(),
-        download_url: Some(installer.browser_download_url.clone()),
-        checksum_url: Some(checksum.browser_download_url.clone()),
+        download_url: None,
+        checksum_url: None,
     }))
 }
 
@@ -350,8 +360,17 @@ fn local_update_candidate(
     }))
 }
 
+fn update_http_client(total: Duration) -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .read_timeout(Duration::from_secs(10))
+        .timeout(total)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
 async fn github_update_candidate() -> Result<Option<LocalUpdateCandidate>, String> {
-    let response = reqwest::Client::new()
+    let response = update_http_client(Duration::from_secs(20))?
         .get(GITHUB_RELEASE_API)
         .header("User-Agent", "lijin-book-update-check")
         .send()
@@ -376,8 +395,6 @@ async fn github_update_candidate() -> Result<Option<LocalUpdateCandidate>, Strin
 }
 
 fn desktop_directory(app: &tauri::AppHandle) -> Option<PathBuf> {
-    // Windows users may redirect Desktop to another drive. The Tauri resolver uses
-    // FOLDERID_Desktop, unlike USERPROFILE\\Desktop which ignores that setting.
     app.path().desktop_dir().ok().filter(|path| path.is_dir())
 }
 
@@ -385,51 +402,7 @@ fn powershell_path_literal(path: &Path) -> String {
     format!("'{}'", path.to_string_lossy().replace('\'', "''"))
 }
 
-fn ensure_desktop_shortcut(app: &tauri::AppHandle) -> Result<(), String> {
-    let Some(desktop) = desktop_directory(app) else {
-        return Ok(());
-    };
-    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
-    let installed_executable = installed_application_path();
-    let portable_executable = desktop.join("礼金簿管理系统").join("礼金簿管理.exe");
-    let shortcut_target = if portable_executable.is_file() {
-        portable_executable
-    } else {
-        installed_executable.clone()
-    };
-    let current_key = executable.canonicalize().ok();
-    let installed_key = installed_executable.canonicalize().ok();
-    let portable_key = shortcut_target.canonicalize().ok();
-    if current_key != installed_key && current_key != portable_key {
-        return Ok(());
-    }
-    let working_directory = shortcut_target
-        .parent()
-        .ok_or_else(|| "无法确定程序目录".to_string())?;
-    let shortcut = desktop.join("礼金簿管理.lnk");
-    let shortcut_literal = powershell_path_literal(&shortcut);
-    let executable_literal = powershell_path_literal(&shortcut_target);
-    let working_directory_literal = powershell_path_literal(working_directory);
-    let script = format!(
-        "$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut({shortcut_literal}); $shortcut.TargetPath = {executable_literal}; $shortcut.WorkingDirectory = {working_directory_literal}; $shortcut.IconLocation = {executable_literal} + ',0'; $shortcut.Description = 'Gift ledger'; $shortcut.Save()"
-    );
-    let status = hidden_windows_command("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-        ])
-        .arg(script)
-        .status()
-        .map_err(|e| format!("无法创建桌面快捷方式: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("无法创建桌面快捷方式".to_string())
-    }
-}
+// Installer owns the variant shortcut. Debug and portable launches never mutate Desktop.
 
 fn normalize_vault_path(path: &str) -> PathBuf {
     let mut result = PathBuf::from(path);
@@ -695,7 +668,7 @@ fn clear_opened_vault_paths(state: &State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-fn is_admin_session(state: &State<'_, AppState>) -> Result<bool, String> {
+fn is_admin_session(state: &AppState) -> Result<bool, String> {
     Ok(state
         .session
         .lock()
@@ -704,7 +677,7 @@ fn is_admin_session(state: &State<'_, AppState>) -> Result<bool, String> {
         == SessionRole::Admin)
 }
 
-fn is_edit_locked(state: &State<'_, AppState>) -> Result<bool, String> {
+fn is_edit_locked(state: &AppState) -> Result<bool, String> {
     Ok(state
         .session
         .lock()
@@ -712,7 +685,7 @@ fn is_edit_locked(state: &State<'_, AppState>) -> Result<bool, String> {
         .edit_locked)
 }
 
-fn set_edit_locked(state: &State<'_, AppState>, locked: bool) -> Result<(), String> {
+fn set_edit_locked(state: &AppState, locked: bool) -> Result<(), String> {
     state
         .session
         .lock()
@@ -741,7 +714,7 @@ fn migrate_vault_if_needed(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn set_admin_session(state: &State<'_, AppState>) -> Result<(), String> {
+fn set_admin_session(state: &AppState) -> Result<(), String> {
     let mut session = state
         .session
         .lock()
@@ -753,15 +726,17 @@ fn set_admin_session(state: &State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-fn reset_session(state: &State<'_, AppState>) -> Result<(), String> {
-    *state
+fn reset_session(state: &AppState) -> Result<(), String> {
+    let mut session = state
         .session
         .lock()
-        .map_err(|_| "管理员会话不可用".to_string())? = SessionState::default();
+        .map_err(|_| "管理员会话不可用".to_string())?;
+    session.role = SessionRole::Viewer;
+    session.edit_locked = true;
     Ok(())
 }
 
-fn require_admin(state: &State<'_, AppState>) -> Result<(), String> {
+fn require_admin(state: &AppState) -> Result<(), String> {
     let mut session = state
         .session
         .lock()
@@ -774,7 +749,7 @@ fn require_admin(state: &State<'_, AppState>) -> Result<(), String> {
 }
 
 fn admin_connection(
-    state: &State<'_, AppState>,
+    state: &AppState,
     vault_path: &str,
     reason: &str,
     high_risk: bool,
@@ -827,7 +802,7 @@ fn canonical_opened_vault_path(
 }
 
 fn admin_connection_for_path(
-    state: &State<'_, AppState>,
+    state: &AppState,
     requested_path: Option<&str>,
     reason: &str,
     high_risk: bool,
@@ -1668,9 +1643,9 @@ fn empty_vault_trash() -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn trash_vault(path: String, state: State<'_, AppState>) -> Result<(), String> {
-    trash_vault_file(Path::new(&path), &state)
+    with_operation(|| trash_vault_file(Path::new(&path), &state))
 }
 
 fn snapshot_vault(source: &Path, destination: &Path) -> Result<(), String> {
@@ -2073,8 +2048,9 @@ fn materialize_comparison_spreadsheet(path: &Path) -> Result<String, String> {
     result
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn choose_comparison_vault_paths(app: tauri::AppHandle) -> Result<Vec<String>, String> {
+    let _operation = begin_operation()?;
     let dialog = desktop_directory(&app)
         .map(|directory| FileDialog::new().set_directory(directory))
         .unwrap_or_else(default_file_dialog);
@@ -2119,16 +2095,30 @@ async fn local_update_status(app: tauri::AppHandle) -> Result<LocalUpdateStatus,
             error: None,
         });
     }
+    Ok(LocalUpdateStatus {
+        current_version: APP_VERSION.to_string(),
+        update_directory: directory.to_string_lossy().to_string(),
+        candidate: None,
+        source: "local".to_string(),
+        error: None,
+    })
+}
+
+#[tauri::command]
+async fn official_release_status(app: tauri::AppHandle) -> Result<LocalUpdateStatus, String> {
+    let local = local_update_status(app).await?;
+    if local.candidate.is_some() {
+        return Ok(local);
+    }
     let (candidate, error) = match github_update_candidate().await {
         Ok(candidate) => (candidate, None),
         Err(error) => (None, Some(error)),
     };
     Ok(LocalUpdateStatus {
-        current_version: APP_VERSION.to_string(),
-        update_directory: directory.to_string_lossy().to_string(),
         candidate,
-        source: "github".to_string(),
         error,
+        source: "github".into(),
+        ..local
     })
 }
 
@@ -2148,6 +2138,7 @@ fn local_update_launcher_script(
     fallback_application: &Path,
     old_process_id: u32,
     log_path: &Path,
+    expected_hash: &str,
 ) -> String {
     let installer = powershell_path_literal(installer);
     let installed_application = powershell_path_literal(installed_application);
@@ -2161,6 +2152,7 @@ $fallbackApplication = {fallback_application}
 $oldProcessId = {old_process_id}
 $log = {log_path}
 $exitCode = 1
+$installerGuard = $null
 try {{
   $deadline = [DateTime]::UtcNow.AddSeconds(15)
   while ((Get-Process -Id $oldProcessId -ErrorAction SilentlyContinue) -and ([DateTime]::UtcNow -lt $deadline)) {{
@@ -2169,7 +2161,11 @@ try {{
   if (Get-Process -Id $oldProcessId -ErrorAction SilentlyContinue) {{
     throw 'The previous application process did not exit in time.'
   }}
-  $process = Start-Process -FilePath $installer -ArgumentList @('/S') -Wait -PassThru
+  $installerGuard = [System.IO.File]::Open($installer, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::Read)
+  if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne '{expected_hash}') {{
+    throw 'Prepared installer integrity check failed.'
+  }}
+  $process = Start-Process -FilePath $installer -ArgumentList @('/S') -Wait -PassThru -WindowStyle Hidden
   $exitCode = $process.ExitCode
   Add-Content -LiteralPath $log -Value "$(Get-Date -Format o) installer exit code: $exitCode"
   if ($exitCode -ne 0) {{
@@ -2179,6 +2175,7 @@ try {{
   $exitCode = 1
   Add-Content -LiteralPath $log -Value "$(Get-Date -Format o) updater error: $($_.Exception.Message)"
 }} finally {{
+  if ($installerGuard) {{ $installerGuard.Dispose() }}
   $launchTarget = if ($exitCode -eq 0) {{ $installedApplication }} else {{ $fallbackApplication }}
   if (!(Test-Path -LiteralPath $launchTarget)) {{
     $launchTarget = if ($exitCode -eq 0) {{ $fallbackApplication }} else {{ $installedApplication }}
@@ -2213,6 +2210,7 @@ fn launch_local_update(
     installer: &Path,
     installed_application: &Path,
     fallback_application: &Path,
+    expected_hash: &str,
 ) -> Result<(), String> {
     // A separate script waits for the app to exit before NSIS replaces its executable.
     let directory = update_runtime_directory();
@@ -2227,6 +2225,7 @@ fn launch_local_update(
             fallback_application,
             std::process::id(),
             &log_path,
+            expected_hash,
         )),
     )
     .map_err(|e| format!("无法写入本地更新脚本: {e}"))?;
@@ -2244,86 +2243,27 @@ fn launch_local_update(
     Ok(())
 }
 
-#[tauri::command]
-async fn download_github_installer(
-    app: &tauri::AppHandle,
-    candidate: &LocalUpdateCandidate,
-) -> Result<PathBuf, String> {
-    let Some(download_url) = candidate.download_url.as_deref() else {
-        return Err("GitHub 更新缺少安装包下载地址".to_string());
-    };
-    let response = reqwest::Client::new()
-        .get(download_url)
-        .header("User-Agent", "lijin-book-update-downloader")
-        .send()
-        .await
-        .map_err(|e| format!("无法下载更新安装包：{e}"))?;
-    if !response.status().is_success() {
-        return Err(format!("更新下载返回 HTTP {}", response.status()));
-    }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| format!("无法读取更新安装包：{e}"))?;
-    let Some(checksum_url) = candidate.checksum_url.as_deref() else {
-        return Err("GitHub 发布缺少 SHA256SUMS.txt，已拒绝安装未经校验的更新".to_string());
-    };
-    let checksum_response = reqwest::Client::new()
-        .get(checksum_url)
-        .header("User-Agent", "lijin-book-update-downloader")
-        .send()
-        .await
-        .map_err(|e| format!("无法下载更新校验清单：{e}"))?;
-    if !checksum_response.status().is_success() {
-        return Err(format!(
-            "更新校验清单返回 HTTP {}",
-            checksum_response.status()
-        ));
-    }
-    let checksum_text = checksum_response
-        .text()
-        .await
-        .map_err(|e| format!("无法读取更新校验清单：{e}"))?;
-    let expected = checksum_text.lines().find_map(|line| {
-        let mut parts = line.split_whitespace();
-        let hash = parts.next()?;
-        let name = parts.next()?.trim_start_matches('*');
-        name.eq_ignore_ascii_case(&candidate.file_name)
-            .then(|| hash.to_string())
-    });
-    let Some(expected) = expected else {
-        return Err("更新校验清单中没有对应安装包".to_string());
-    };
-    let actual = format!("{:x}", Sha256::digest(&bytes));
-    if !actual.eq_ignore_ascii_case(&expected) {
-        return Err("更新安装包 SHA-256 校验失败，未执行安装".to_string());
-    }
-    let directory = ensure_published_update_directory(app)?;
-    let destination = directory.join(&candidate.file_name);
-    let temporary = directory.join(format!(".{}.download", candidate.file_name));
-    std::fs::write(&temporary, &bytes).map_err(|e| format!("无法保存更新安装包：{e}"))?;
-    if let Err(error) = std::fs::rename(&temporary, &destination) {
-        let _ = std::fs::remove_file(&temporary);
-        return Err(format!("无法准备更新安装包：{error}"));
-    }
-    Ok(destination)
-}
-
-#[tauri::command]
-async fn start_local_update(app: tauri::AppHandle) -> Result<(), String> {
-    let (candidate, installer) = if let Some((candidate, installer)) = local_update_candidate(&app)?
-    {
-        (candidate, installer)
-    } else if let Some(candidate) = github_update_candidate().await? {
-        let installer = download_github_installer(&app, &candidate).await?;
-        (candidate, installer)
-    } else {
-        return Err("没有检测到更高版本的礼金簿管理安装包".to_string());
-    };
+#[tauri::command(async)]
+fn start_local_update(app: tauri::AppHandle) -> Result<(), String> {
+    let _operation = begin_operation()?;
+    let (candidate, _) = local_update_candidate(&app)?
+        .ok_or("未检测到更高版本的礼金簿—改动本地安装包；原版官方信息不提供改动版安装")?;
+    let directory = published_update_directory(&app);
+    let (installer, expected_hash) = update_security::prepare_installer(
+        &directory,
+        &candidate.file_name,
+        APP_VERSION,
+        &update_runtime_directory(),
+    )?;
     let application = std::env::current_exe().map_err(|e| format!("无法确定当前程序位置: {e}"))?;
     let installed_application = installed_application_path();
-    launch_local_update(&installer, &installed_application, &application)
-        .map_err(|e| format!("无法启动 v{} 更新安装包: {e}", candidate.version))?;
+    launch_local_update(
+        &installer,
+        &installed_application,
+        &application,
+        &expected_hash,
+    )
+    .map_err(|e| format!("无法启动 v{} 更新安装包: {e}", candidate.version))?;
     app.exit(0);
     Ok(())
 }
@@ -2345,8 +2285,9 @@ fn settings_storage_info(app: tauri::AppHandle) -> SettingsStorageInfo {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn choose_settings_directory(app: tauri::AppHandle) -> Result<Option<SettingsStorageInfo>, String> {
+    let _operation = begin_operation()?;
     let Some(directory) = default_file_dialog().pick_folder() else {
         return Ok(None);
     };
@@ -2363,13 +2304,14 @@ fn choose_settings_directory(app: tauri::AppHandle) -> Result<Option<SettingsSto
     }))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_vault(
     path: String,
     name: String,
     notes: String,
     state: State<'_, AppState>,
 ) -> Result<VaultOpenResult, String> {
+    let _operation = begin_operation()?;
     require_admin(&state)?;
     if name.trim().is_empty() {
         return Err("礼金库名称不能为空".to_string());
@@ -2416,13 +2358,14 @@ fn create_vault_file(path: &Path, name: &str, notes: &str) -> Result<(), String>
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn edit_vault(
     name: String,
     notes: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<VaultInfo, String> {
+    let _operation = begin_operation()?;
     if name.trim().is_empty() {
         return Err("礼金库名称不能为空".to_string());
     }
@@ -2506,8 +2449,9 @@ fn current_vault_info(vault_path: String, state: State<'_, AppState>) -> Result<
     vault_info(&path, &connection)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn open_vault(path: String, state: State<'_, AppState>) -> Result<VaultOpenResult, String> {
+    let _operation = begin_operation()?;
     let path = PathBuf::from(path);
     if !path.is_file() {
         return Err("找不到礼金库文件".to_string());
@@ -2556,8 +2500,9 @@ fn open_vault(path: String, state: State<'_, AppState>) -> Result<VaultOpenResul
     result
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn close_vault(state: State<'_, AppState>) -> Result<(), String> {
+    let _operation = begin_operation()?;
     *state
         .vault_path
         .lock()
@@ -2566,9 +2511,9 @@ fn close_vault(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn close_opened_vault(vault_path: String, state: State<'_, AppState>) -> Result<(), String> {
-    close_opened_vault_path(&state, Path::new(&vault_path))
+    with_operation(|| close_opened_vault_path(&state, Path::new(&vault_path)))
 }
 
 fn close_opened_vault_path(state: &AppState, path: &Path) -> Result<(), String> {
@@ -2594,8 +2539,9 @@ fn close_opened_vault_path(state: &AppState, path: &Path) -> Result<(), String> 
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn return_to_start_page(state: State<'_, AppState>) -> Result<(), String> {
+    let _operation = begin_operation()?;
     *state
         .vault_path
         .lock()
@@ -2604,7 +2550,7 @@ fn return_to_start_page(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn session_status(state: State<'_, AppState>) -> Result<SessionStatus, String> {
     let session = state
         .session
@@ -2622,61 +2568,91 @@ fn session_status(state: State<'_, AppState>) -> Result<SessionStatus, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_app_security_status(state: State<'_, AppState>) -> Result<SessionStatus, String> {
     session_status(state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn setup_app_admin_pin(pin: String, state: State<'_, AppState>) -> Result<String, String> {
+    let _operation = begin_operation()?;
     let recovery_code = state.security.setup_pin(&pin)?;
     set_admin_session(&state)?;
     Ok(recovery_code)
 }
 
-#[tauri::command]
-fn unlock_admin(pin: String, state: State<'_, AppState>) -> Result<(), String> {
-    validate_pin(&pin)?;
-    {
-        let session = state
-            .session
-            .lock()
-            .map_err(|_| "管理员会话不可用".to_string())?;
-        if session
-            .locked_until
-            .is_some_and(|until| until > Instant::now())
-        {
-            return Err("PIN 尝试次数过多，请稍后再试".to_string());
-        }
-    }
-    if state.security.verify_pin(&pin)? {
-        return set_admin_session(&state);
-    }
+fn authentication_attempt<T>(
+    state: &AppState,
+    verify: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
     let mut session = state
         .session
         .lock()
         .map_err(|_| "管理员会话不可用".to_string())?;
-    session.failed_attempts += 1;
-    if session.failed_attempts >= MAX_LOGIN_ATTEMPTS {
-        session.failed_attempts = 0;
-        session.locked_until = Some(Instant::now() + LOGIN_COOLDOWN);
+    if session
+        .locked_until
+        .is_some_and(|until| until > Instant::now())
+    {
+        return Err("凭据尝试次数过多，请稍后再试".to_string());
     }
-    Err("管理员 PIN 不正确".to_string())
+    match verify() {
+        Ok(value) => {
+            session.failed_attempts = 0;
+            session.locked_until = None;
+            Ok(value)
+        }
+        Err(error) => {
+            session.failed_attempts = session.failed_attempts.saturating_add(1);
+            if session.failed_attempts >= MAX_LOGIN_ATTEMPTS {
+                session.failed_attempts = 0;
+                session.locked_until = Some(Instant::now() + LOGIN_COOLDOWN);
+            }
+            Err(error)
+        }
+    }
 }
 
-#[tauri::command]
+fn verify_pin_for_operation(state: &AppState, pin: &str) -> Result<(), String> {
+    authentication_attempt(state, || {
+        validate_pin(pin)?;
+        if state.security.verify_pin(pin)? {
+            Ok(())
+        } else {
+            Err("管理员 PIN 不正确".to_string())
+        }
+    })
+}
+
+fn authorize_empty_trash(state: &AppState, pin: &str) -> Result<(), String> {
+    require_admin(state)?;
+    if is_edit_locked(state)? {
+        return Err("编辑已锁定，请先解锁编辑".to_string());
+    }
+    verify_pin_for_operation(state, pin)
+}
+
+#[tauri::command(async)]
+fn unlock_admin(pin: String, state: State<'_, AppState>) -> Result<(), String> {
+    let _operation = begin_operation()?;
+    verify_pin_for_operation(&state, &pin)?;
+    set_admin_session(&state)
+}
+
+#[tauri::command(async)]
 fn lock_admin(state: State<'_, AppState>) -> Result<(), String> {
-    reset_session(&state)
+    with_operation(|| reset_session(&state))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn unlock_editing(state: State<'_, AppState>) -> Result<(), String> {
+    let _operation = begin_operation()?;
     require_admin(&state)?;
     set_edit_locked(&state, false)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn lock_editing(state: State<'_, AppState>) -> Result<(), String> {
+    let _operation = begin_operation()?;
     require_admin(&state)?;
     set_edit_locked(&state, true)
 }
@@ -2686,25 +2662,30 @@ fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn reset_app_pin_with_recovery(
     recovery: String,
     new_pin: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    let replacement_recovery = state.security.reset_with_recovery(&recovery, &new_pin)?;
+    let _operation = begin_operation()?;
+    let replacement_recovery = authentication_attempt(&state, || {
+        state.security.reset_with_recovery(&recovery, &new_pin)
+    })?;
     set_admin_session(&state)?;
     Ok(replacement_recovery)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn change_app_admin_pin(
     old_pin: String,
     new_pin: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
+    let _operation = begin_operation()?;
     require_admin(&state)?;
-    let replacement_recovery = state.security.change_pin(&old_pin, &new_pin)?;
+    let replacement_recovery =
+        authentication_attempt(&state, || state.security.change_pin(&old_pin, &new_pin))?;
     set_admin_session(&state)?;
     Ok(replacement_recovery)
 }
@@ -2769,7 +2750,7 @@ fn list_books_for_vault(
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_book(
     title: String,
     occasion: String,
@@ -2779,6 +2760,7 @@ fn create_book(
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<GiftBook, String> {
+    let _operation = begin_operation()?;
     for (label, value, max) in [
         ("礼金簿名称", &title, 256),
         ("活动类型", &occasion, 256),
@@ -2824,13 +2806,14 @@ fn create_book(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn edit_book(
     book_id: String,
     input: EditBookInput,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<GiftBook, String> {
+    let _operation = begin_operation()?;
     if input.title.trim().is_empty() {
         return Err("礼金簿名称不能为空".to_string());
     }
@@ -2840,28 +2823,28 @@ fn edit_book(
         .transaction()
         .map_err(|error| error.to_string())?;
     let existing = transaction
-        .query_row(
-            "SELECT title, occasion, event_date, location, notes, created_at, source_file_name, source_file_path, source_imported_at
-             FROM gift_books WHERE id = ? AND deleted_at IS NULL",
-            params![book_id],
-            |row| {
-                Ok(GiftBook {
-                    id: book_id.clone(),
-                    title: row.get(0)?,
-                    occasion: row.get(1)?,
-                    event_date: row.get(2)?,
-                    location: row.get(3)?,
-                    notes: row.get(4)?,
-                    created_at: row.get(5)?,
-                    source_file_name: row.get(6)?,
-                    source_file_path: row.get(7)?,
-                    source_imported_at: row.get(8)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "礼金簿不存在或已移入回收站".to_string())?;
+    .query_row(
+        "SELECT title, occasion, event_date, location, notes, created_at, source_file_name, source_file_path, source_imported_at
+         FROM gift_books WHERE id = ? AND deleted_at IS NULL",
+        params![book_id],
+        |row| {
+            Ok(GiftBook {
+                id: book_id.clone(),
+                title: row.get(0)?,
+                occasion: row.get(1)?,
+                event_date: row.get(2)?,
+                location: row.get(3)?,
+                notes: row.get(4)?,
+                created_at: row.get(5)?,
+                source_file_name: row.get(6)?,
+                source_file_path: row.get(7)?,
+                source_imported_at: row.get(8)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|error| error.to_string())?
+    .ok_or_else(|| "礼金簿不存在或已移入回收站".to_string())?;
 
     for (label, value, previous, max) in [
         (
@@ -2939,11 +2922,11 @@ fn edit_book(
     }
 
     transaction
-        .execute(
-            "UPDATE gift_books SET title = ?, occasion = ?, event_date = ?, location = ?, notes = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
-            params![title, occasion, event_date, location, notes, now(), book_id],
-        )
-        .map_err(|error| error.to_string())?;
+    .execute(
+        "UPDATE gift_books SET title = ?, occasion = ?, event_date = ?, location = ?, notes = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+        params![title, occasion, event_date, location, notes, now(), book_id],
+    )
+    .map_err(|error| error.to_string())?;
 
     if !changes.is_empty() {
         write_audit_detail(
@@ -2976,12 +2959,13 @@ fn edit_book(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn restore_book(
     book_id: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let _operation = begin_operation()?;
     let mut connection = admin_connection(&state, &vault_path, "restore-book", false)?;
     restore_book_record(&mut connection, &book_id)
 }
@@ -4131,7 +4115,7 @@ fn spreadsheet_preview_result(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn preview_spreadsheet(
     path: String,
     vault_path: String,
@@ -4150,7 +4134,7 @@ fn preview_spreadsheet(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn preview_spreadsheet_mapping(
     path: String,
     sheet_name: Option<String>,
@@ -4172,13 +4156,19 @@ fn preview_spreadsheet_mapping(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_spreadsheet(
     path: String,
     book_id: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<SpreadsheetImportResult, String> {
+    let _operation = begin_operation()?;
+    require_admin(&state)?;
+    if is_edit_locked(&state)? {
+        return Err("编辑已锁定，请先解锁编辑".into());
+    }
+    let vault_path = displayable_path(&canonical_opened_vault_path(&state, Some(&vault_path))?);
     let sheet = parse_sheet(&path)?;
     let analysis = analyze_sheet(&sheet);
     validate_spreadsheet_import(&analysis)?;
@@ -4390,11 +4380,21 @@ fn unique_book_title(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn import_spreadsheets(
     items: Vec<SpreadsheetImportItem>,
     state: State<'_, AppState>,
 ) -> Result<SpreadsheetBatchImportResult, String> {
+    let _operation = begin_operation()?;
+    require_admin(&state)?;
+    if is_edit_locked(&state)? {
+        return Err("编辑已锁定，请先解锁编辑".into());
+    }
+    let requested = items
+        .first()
+        .and_then(|item| item.target_vault_path.as_deref())
+        .ok_or("请选择导入目标礼金库")?;
+    canonical_opened_vault_path(&state, Some(requested))?;
     if items.is_empty() {
         return Err("没有待导入的表格文件".to_string());
     }
@@ -4471,29 +4471,29 @@ fn import_spreadsheets(
             prepared_item.item.target_book_id.as_deref()
         {
             let book = transaction
-                .query_row(
-                    "SELECT id, title, occasion, event_date, location, notes, created_at, source_file_name, source_file_path, source_imported_at FROM gift_books WHERE id = ? AND deleted_at IS NULL",
-                    params![target_book_id],
-                    |row| {
-                        Ok(GiftBook {
-                            id: row.get(0)?,
-                            title: row.get(1)?,
-                            occasion: row.get(2)?,
-                            event_date: row.get(3)?,
-                            location: row.get(4)?,
-                            notes: row.get(5)?,
-                            created_at: row.get(6)?,
-                            source_file_name: row.get(7)?,
-                            source_file_path: row
-                                .get::<_, Option<String>>(8)?
-                                .map(|path| displayable_path(Path::new(&path))),
-                            source_imported_at: row.get(9)?,
-                        })
-                    },
-                )
-                .optional()
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| "导入目标礼金簿不存在或已被删除".to_string())?;
+            .query_row(
+                "SELECT id, title, occasion, event_date, location, notes, created_at, source_file_name, source_file_path, source_imported_at FROM gift_books WHERE id = ? AND deleted_at IS NULL",
+                params![target_book_id],
+                |row| {
+                    Ok(GiftBook {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        occasion: row.get(2)?,
+                        event_date: row.get(3)?,
+                        location: row.get(4)?,
+                        notes: row.get(5)?,
+                        created_at: row.get(6)?,
+                        source_file_name: row.get(7)?,
+                        source_file_path: row
+                            .get::<_, Option<String>>(8)?
+                            .map(|path| displayable_path(Path::new(&path))),
+                        source_imported_at: row.get(9)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "导入目标礼金簿不存在或已被删除".to_string())?;
             (book.id.clone(), book.title.clone(), book)
         } else {
             let title_request = if prepared_item.item.book_name.trim().is_empty() {
@@ -4504,11 +4504,11 @@ fn import_spreadsheets(
             let title = unique_book_title(&transaction, &title_request, &mut reserved_titles);
             let book_id = Uuid::new_v4().to_string();
             transaction
-                .execute(
-                    "INSERT INTO gift_books(id, title, occasion, created_at, updated_at, source_file_name, source_file_path, source_imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    params![book_id, title, "导入表格", timestamp, timestamp, source_file_name, source_file_path, timestamp],
-                )
-                .map_err(|e| e.to_string())?;
+            .execute(
+                "INSERT INTO gift_books(id, title, occasion, created_at, updated_at, source_file_name, source_file_path, source_imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![book_id, title, "导入表格", timestamp, timestamp, source_file_name, source_file_path, timestamp],
+            )
+            .map_err(|e| e.to_string())?;
             let book = GiftBook {
                 id: book_id.clone(),
                 title: title.clone(),
@@ -4815,7 +4815,7 @@ fn write_excel_datetime_or_text(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn export_book_xlsx(
     book_id: String,
     columns: Option<Vec<String>>,
@@ -5012,8 +5012,9 @@ fn export_book_xlsx(
     Ok(destination)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn export_vault(vault_path: String, state: State<'_, AppState>) -> Result<String, String> {
+    let _operation = begin_operation()?;
     let destination =
         choose_file_path("save", "礼金库文件", &["giftvault"], "礼金库导出.giftvault")
             .ok_or_else(|| "已取消导出礼金库".to_string())?;
@@ -5269,7 +5270,7 @@ fn list_return_gifts_from_connection(
     Ok(records)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn update_return_gift_information(
     entry_id: String,
     amount_fen: i64,
@@ -5277,6 +5278,7 @@ fn update_return_gift_information(
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<ReturnGiftRecord, String> {
+    let _operation = begin_operation()?;
     validate_amount(amount_fen)?;
     let audit_vault_path =
         displayable_path(&canonical_opened_vault_path(&state, Some(&vault_path))?);
@@ -5284,28 +5286,28 @@ fn update_return_gift_information(
         admin_connection(&state, &vault_path, "update-return-gift-information", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let snapshot = transaction
-        .query_row(
-            "SELECT b.id, b.title, p.id, p.display_name, p.address, e.return_gift_amount_fen, e.return_gifted_at, e.return_gift
-             FROM gift_entries e
-             JOIN gift_books b ON b.id = e.book_id
-             JOIN people p ON p.id = e.person_id
-             WHERE e.id = ? AND e.deleted_at IS NULL AND b.deleted_at IS NULL AND p.deleted_at IS NULL
-               AND e.return_gift_amount_fen IS NOT NULL AND e.return_gift_amount_fen > 0",
-            params![entry_id],
-            |row| Ok(ReturnGiftUpdateSnapshot {
-                book_id: row.get(0)?,
-                book_title: row.get(1)?,
-                person_id: row.get(2)?,
-                person_name: row.get(3)?,
-                address: row.get(4)?,
-                previous_amount: row.get(5)?,
-                return_gifted_at: row.get(6)?,
-                return_gift: row.get(7)?,
-            }),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "回礼记录不存在或已被删除".to_string())?;
+    .query_row(
+        "SELECT b.id, b.title, p.id, p.display_name, p.address, e.return_gift_amount_fen, e.return_gifted_at, e.return_gift
+         FROM gift_entries e
+         JOIN gift_books b ON b.id = e.book_id
+         JOIN people p ON p.id = e.person_id
+         WHERE e.id = ? AND e.deleted_at IS NULL AND b.deleted_at IS NULL AND p.deleted_at IS NULL
+           AND e.return_gift_amount_fen IS NOT NULL AND e.return_gift_amount_fen > 0",
+        params![entry_id],
+        |row| Ok(ReturnGiftUpdateSnapshot {
+            book_id: row.get(0)?,
+            book_title: row.get(1)?,
+            person_id: row.get(2)?,
+            person_name: row.get(3)?,
+            address: row.get(4)?,
+            previous_amount: row.get(5)?,
+            return_gifted_at: row.get(6)?,
+            return_gift: row.get(7)?,
+        }),
+    )
+    .optional()
+    .map_err(|e| e.to_string())?
+    .ok_or_else(|| "回礼记录不存在或已被删除".to_string())?;
     if return_gift != snapshot.return_gift.as_deref().unwrap_or_default() {
         validate_text("回礼备注", &return_gift, 65536)?;
     }
@@ -5317,11 +5319,11 @@ fn update_return_gift_information(
     let stored_return_time = snapshot.return_gifted_at.unwrap_or_default();
     let timestamp = now();
     transaction
-        .execute(
-            "UPDATE gift_entries SET return_gift_amount_fen = ?, return_gift = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
-            params![amount_fen, saved_return_gift, timestamp, entry_id],
-        )
-        .map_err(|e| e.to_string())?;
+    .execute(
+        "UPDATE gift_entries SET return_gift_amount_fen = ?, return_gift = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
+        params![amount_fen, saved_return_gift, timestamp, entry_id],
+    )
+    .map_err(|e| e.to_string())?;
     let mut changes = Vec::new();
     if snapshot.previous_amount != amount_fen {
         changes.push(machine_change(
@@ -5451,12 +5453,13 @@ fn search_vault(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_entry(
     input: CreateEntryInput,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<GiftEntry, String> {
+    let _operation = begin_operation()?;
     let CreateEntryInput {
         book_id,
         person_name,
@@ -5528,12 +5531,13 @@ fn create_entry(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn update_entry(
     input: UpdateEntryInput,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<GiftEntry, String> {
+    let _operation = begin_operation()?;
     let path = canonical_opened_vault_path(&state, Some(&vault_path))?;
     let mut connection = admin_connection(&state, &vault_path, "update-entry", false)?;
     update_entry_record(input, &mut connection, &displayable_path(&path))
@@ -5742,12 +5746,13 @@ fn update_entry_record(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_entry(
     entry_id: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let _operation = begin_operation()?;
     let mut connection = admin_connection(&state, &vault_path, "delete-entry", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
     let snapshot = entry_audit_snapshot(&transaction, &entry_id)?;
@@ -5772,12 +5777,13 @@ fn delete_entry(
     transaction.commit().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn restore_entry(
     entry_id: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let _operation = begin_operation()?;
     let mut connection = admin_connection(&state, &vault_path, "restore-entry", false)?;
     restore_entry_record(&mut connection, &entry_id)
 }
@@ -5833,12 +5839,13 @@ fn ensure_person_restore_books_active(
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_person(
     person_id: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let _operation = begin_operation()?;
     let audit_vault_path =
         displayable_path(&canonical_opened_vault_path(&state, Some(&vault_path))?);
     let mut connection = admin_connection(&state, &vault_path, "delete-person", true)?;
@@ -5855,11 +5862,11 @@ fn delete_person(
     let book_sources = audit_person_book_sources(&transaction, &person_id)?;
     let timestamp = now();
     transaction
-        .execute(
-            "UPDATE gift_entries SET deleted_at = ?, updated_at = ? WHERE person_id = ? AND deleted_at IS NULL",
-            params![timestamp, timestamp, person_id],
-        )
-        .map_err(|e| e.to_string())?;
+    .execute(
+        "UPDATE gift_entries SET deleted_at = ?, updated_at = ? WHERE person_id = ? AND deleted_at IS NULL",
+        params![timestamp, timestamp, person_id],
+    )
+    .map_err(|e| e.to_string())?;
     transaction
         .execute(
             "UPDATE people SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL",
@@ -5939,12 +5946,13 @@ fn restore_person_record(connection: &mut Connection, person_id: &str) -> Result
     transaction.commit().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn restore_person(
     person_id: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let _operation = begin_operation()?;
     let mut connection = admin_connection(&state, &vault_path, "restore-person", false)?;
     restore_person_record(&mut connection, &person_id)
 }
@@ -6039,7 +6047,7 @@ fn list_trash_from_connection(
     Ok(items)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn list_trash(state: State<'_, AppState>) -> Result<Vec<TrashItem>, String> {
     let mut items = Vec::new();
     for path in opened_vault_paths(&state)? {
@@ -6903,12 +6911,13 @@ fn audit_restore_rows(
     Ok(rows)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn restore_audit_logs(
     ids: Vec<String>,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let _operation = begin_operation()?;
     if ids.is_empty() {
         return Err("请先进入多选并选择要恢复的历史改动".to_string());
     }
@@ -6958,25 +6967,26 @@ fn restore_selected_audit_records(
     transaction.commit().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn clear_audit_logs(
     ids: Option<Vec<String>>,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let _operation = begin_operation()?;
     let connection = admin_connection(&state, &vault_path, "clear-audit-logs", false)?;
     delete_audit_logs(&connection, &ids.unwrap_or_default())?;
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn restore_trash_item(
     kind: String,
     id: String,
     vault_path: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    match kind.as_str() {
+    with_operation(|| match kind.as_str() {
         "book" | "entry" | "tag" | "person" => {
             let requested_path = vault_path
                 .as_deref()
@@ -6998,7 +7008,7 @@ fn restore_trash_item(
         }
         "vault" => restore_vault_file(&id, &state),
         _ => Err("不支持的回收站项目类型".to_string()),
-    }
+    })
 }
 
 fn empty_trash_records(connection: &mut Connection) -> Result<(), String> {
@@ -7034,24 +7044,44 @@ fn empty_trash_records(connection: &mut Connection) -> Result<(), String> {
     transaction.commit().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn empty_trash(pin: String, state: State<'_, AppState>) -> Result<(), String> {
-    unlock_admin(pin, state.clone())?;
-    set_edit_locked(&state, false)?;
-    for path in opened_vault_paths(&state)? {
-        let canonical = path.canonicalize().unwrap_or(path);
-        if !canonical.is_file() {
-            continue;
+    with_operation(|| {
+        authorize_empty_trash(&state, &pin)?;
+        let mut completed = Vec::new();
+        for path in opened_vault_paths(&state)? {
+            let name = displayable_path(&path);
+            let result = (|| {
+                let canonical = path
+                    .canonicalize()
+                    .map_err(|_| "礼金库文件已不可访问".to_string())?;
+                let mut connection = admin_connection_for_path(
+                    &state,
+                    Some(&displayable_path(&canonical)),
+                    "empty-trash",
+                    true,
+                )?;
+                empty_trash_records(&mut connection)
+            })();
+            if let Err(error) = result {
+                return Err(format!(
+                    "已清空范围：{}；失败库：{name}：{error}；其余范围未清空",
+                    if completed.is_empty() {
+                        "无".to_string()
+                    } else {
+                        completed.join("、")
+                    }
+                ));
+            }
+            completed.push(name);
         }
-        let mut connection = admin_connection_for_path(
-            &state,
-            Some(&displayable_path(&canonical)),
-            "empty-trash",
-            true,
-        )?;
-        empty_trash_records(&mut connection)?;
-    }
-    empty_vault_trash()
+        empty_vault_trash().map_err(|error| {
+            format!(
+                "已清空打开库：{}；删除库文件清理失败：{error}",
+                completed.join("、")
+            )
+        })
+    })
 }
 
 #[tauri::command]
@@ -7097,13 +7127,14 @@ fn normalize_tag_color(color: &str) -> Result<String, String> {
     Ok(color.to_ascii_lowercase())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn create_tag(
     name: String,
     color: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<Tag, String> {
+    let _operation = begin_operation()?;
     validate_text("标签名称", &name, 256)?;
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -7170,12 +7201,13 @@ fn create_tag(
     Ok(Tag { id, name, color })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn delete_tag(
     tag_id: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let _operation = begin_operation()?;
     let mut connection = admin_connection(&state, &vault_path, "delete-tag", true)?;
     delete_tag_record(&mut connection, &tag_id)
 }
@@ -7249,13 +7281,14 @@ fn restore_tag_record(connection: &mut Connection, tag_id: &str) -> Result<(), S
     transaction.commit().map_err(|e| e.to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn update_tag_color(
     tag_id: String,
     color: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let _operation = begin_operation()?;
     let color = normalize_tag_color(&color)?;
     let mut connection = admin_connection(&state, &vault_path, "update-tag-color", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
@@ -7349,13 +7382,14 @@ fn list_people(
     Ok(people)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_person_tags(
     person_id: String,
     tag_ids: Vec<String>,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
+    let _operation = begin_operation()?;
     let audit_vault_path =
         displayable_path(&canonical_opened_vault_path(&state, Some(&vault_path))?);
     let mut connection = admin_connection(&state, &vault_path, "set-person-tags", false)?;
@@ -7369,12 +7403,12 @@ fn set_person_tags(
         .map_err(|e| e.to_string())?;
     let before_ids = active_person_tag_ids(&transaction, &person_id)?;
     let before_tags: String = transaction
-        .query_row(
-            "SELECT COALESCE((SELECT GROUP_CONCAT(t.name, '、') FROM person_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.person_id = p.id AND t.deleted_at IS NULL), '') FROM people p WHERE p.id = ?",
-            params![person_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    .query_row(
+        "SELECT COALESCE((SELECT GROUP_CONCAT(t.name, '、') FROM person_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.person_id = p.id AND t.deleted_at IS NULL), '') FROM people p WHERE p.id = ?",
+        params![person_id],
+        |row| row.get(0),
+    )
+    .map_err(|e| e.to_string())?;
     transaction
         .execute(
             "DELETE FROM person_tags WHERE person_id = ?",
@@ -7384,12 +7418,12 @@ fn set_person_tags(
     apply_entry_tags(&transaction, &person_id, &tag_ids)?;
     let after_ids = active_person_tag_ids(&transaction, &person_id)?;
     let after_tags: String = transaction
-        .query_row(
-            "SELECT COALESCE((SELECT GROUP_CONCAT(t.name, '、') FROM person_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.person_id = p.id AND t.deleted_at IS NULL), '') FROM people p WHERE p.id = ?",
-            params![person_id],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    .query_row(
+        "SELECT COALESCE((SELECT GROUP_CONCAT(t.name, '、') FROM person_tags pt JOIN tags t ON t.id = pt.tag_id WHERE pt.person_id = p.id AND t.deleted_at IS NULL), '') FROM people p WHERE p.id = ?",
+        params![person_id],
+        |row| row.get(0),
+    )
+    .map_err(|e| e.to_string())?;
     if before_ids != after_ids {
         let book_sources = audit_person_book_sources(&transaction, &person_id)?;
         let book_titles = book_sources
@@ -8221,12 +8255,21 @@ fn comparison_person_history(
 }
 
 pub fn run() {
+    #[cfg(windows)]
+    let _instance = {
+        let profile = app_profile_directory();
+        let key = format!("{:x}", Sha256::digest(comparable_path(&profile).as_bytes()));
+        match single_instance::InstanceGuard::acquire(&format!("Global\\lijin-remediation-{key}")) {
+            Ok(guard) => guard,
+            Err(error) => {
+                eprintln!("{error}");
+                return;
+            }
+        }
+    };
     configure_embedded_webview_runtime();
     tauri::Builder::default()
         .setup(|app| {
-            if let Err(error) = ensure_desktop_shortcut(app.handle()) {
-                eprintln!("无法刷新桌面快捷方式: {error}");
-            }
             if let Err(error) = ensure_published_update_directory(app.handle()) {
                 eprintln!("无法初始化桌面发布目录: {error}");
             }
@@ -8245,12 +8288,14 @@ pub fn run() {
             local_update_status,
             open_local_update_directory,
             start_local_update,
+            official_release_status,
             settings_storage_info,
             choose_settings_directory,
             license_text,
             create_vault,
             open_vault,
             close_vault,
+            close_opened_vault,
             return_to_start_page,
             exit_app,
             session_status,
@@ -8323,6 +8368,215 @@ mod tests {
     use super::*;
 
     #[test]
+    fn remediation_http_client_enforces_timeout_inside_tauri_async_runtime() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request);
+            std::thread::sleep(Duration::from_millis(150));
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}");
+        });
+        let result = tauri::async_runtime::block_on(async {
+            let client = update_http_client(Duration::from_millis(40)).unwrap();
+            client
+                .get(format!("http://{address}/controlled-release-test"))
+                .send()
+                .await
+        });
+        server.join().unwrap();
+        assert!(result.is_err_and(|error| error.is_timeout()));
+    }
+
+    #[test]
+    fn remediation_serializes_actual_snapshot_before_read_and_transaction_commit() {
+        use std::sync::{mpsc, Arc};
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("serial-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("fixture.giftvault");
+        create_vault_file(&path, "fixture", "").unwrap();
+        let c = Connection::open(&path).unwrap();
+        c.execute("INSERT INTO gift_books(id,title,created_at,updated_at) VALUES ('b','book','now','now')", []).unwrap();
+        c.execute("INSERT INTO people(id,display_name,created_at,updated_at) VALUES ('p','person','now','now')", []).unwrap();
+        c.execute("INSERT INTO gift_entries(id,book_id,person_id,amount_fen,payment_method,received_at,created_at,updated_at) VALUES ('e','b','p',100,'cash','2026-10-14','now','now')", []).unwrap();
+        drop(c);
+        let state = Arc::new(AppState {
+            vault_path: Mutex::new(Some(path.clone())),
+            opened_vault_paths: Mutex::new(vec![path.clone()]),
+            security: AppSecurityStore::new(directory.join("unused-security.sqlite")),
+            session: Mutex::new(SessionState {
+                role: SessionRole::Admin,
+                edit_locked: false,
+                ..Default::default()
+            }),
+        });
+        let (sent, received) = mpsc::channel();
+        let first_state = state.clone();
+        let first_path = path.clone();
+        let first = std::thread::spawn(move || {
+            with_operation(|| {
+                let mut c = admin_connection(
+                    &first_state,
+                    &displayable_path(&first_path),
+                    "serialization-test",
+                    true,
+                )?;
+                let before: i64 = c
+                    .query_row(
+                        "SELECT amount_fen FROM gift_entries WHERE id='e'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                sent.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(200));
+                let tx = c.transaction().unwrap();
+                tx.execute(
+                    "UPDATE gift_entries SET amount_fen=? WHERE id='e'",
+                    [before + 1],
+                )
+                .unwrap();
+                tx.commit().unwrap();
+                Ok(())
+            })
+        });
+        received.recv().unwrap();
+        let second_state = state.clone();
+        let second_path = path.clone();
+        let second = std::thread::spawn(move || {
+            with_operation(|| {
+                let mut c = admin_connection(
+                    &second_state,
+                    &displayable_path(&second_path),
+                    "serialization-test",
+                    true,
+                )?;
+                let before: i64 = c
+                    .query_row(
+                        "SELECT amount_fen FROM gift_entries WHERE id='e'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap();
+                let tx = c.transaction().unwrap();
+                tx.execute(
+                    "UPDATE gift_entries SET amount_fen=? WHERE id='e'",
+                    [before + 1],
+                )
+                .unwrap();
+                tx.commit().unwrap();
+                Ok(before)
+            })
+        });
+        first.join().unwrap().unwrap();
+        assert_eq!(
+            second.join().unwrap().unwrap(),
+            101,
+            "second preparation must see first commit"
+        );
+        let c = Connection::open(&path).unwrap();
+        assert_eq!(
+            c.query_row(
+                "SELECT amount_fen FROM gift_entries WHERE id='e'",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            102
+        );
+        drop(c);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    fn remediation_security_state() -> AppState {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("auth-{}.sqlite", Uuid::new_v4()));
+        let security = AppSecurityStore::new(path);
+        security.setup_pin("123456").unwrap();
+        AppState {
+            vault_path: Mutex::new(None),
+            opened_vault_paths: Mutex::new(Vec::new()),
+            security,
+            session: Mutex::new(SessionState::default()),
+        }
+    }
+
+    #[test]
+    fn remediation_clear_trash_does_not_promote_viewer_or_unlock_admin() {
+        let state = remediation_security_state();
+        assert!(authorize_empty_trash(&state, "123456").is_err());
+        assert!(state.session.lock().unwrap().role == SessionRole::Viewer);
+        set_admin_session(&state).unwrap();
+        assert!(authorize_empty_trash(&state, "123456").is_err());
+        assert!(state.session.lock().unwrap().edit_locked);
+        set_edit_locked(&state, false).unwrap();
+        authorize_empty_trash(&state, "123456").unwrap();
+        assert!(state.session.lock().unwrap().role == SessionRole::Admin);
+        assert!(!state.session.lock().unwrap().edit_locked);
+    }
+
+    #[test]
+    fn remediation_pin_and_recovery_share_limit_even_after_logout() {
+        let state = remediation_security_state();
+        for _ in 0..MAX_LOGIN_ATTEMPTS {
+            assert!(verify_pin_for_operation(&state, "wrong").is_err());
+            reset_session(&state).unwrap();
+        }
+        assert!(verify_pin_for_operation(&state, "123456")
+            .unwrap_err()
+            .contains("次数过多"));
+        assert!(authentication_attempt(&state, || state
+            .security
+            .reset_with_recovery("bad", "654321"))
+        .unwrap_err()
+        .contains("次数过多"));
+        assert!(state.security.verify_pin("123456").unwrap());
+    }
+
+    #[test]
+    fn remediation_logout_preserves_attempt_cooldown() {
+        let state = AppState {
+            vault_path: Mutex::new(None),
+            opened_vault_paths: Mutex::new(Vec::new()),
+            security: AppSecurityStore::new(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("target")
+                    .join("never-open.sqlite"),
+            ),
+            session: Mutex::new(SessionState {
+                role: SessionRole::Admin,
+                failed_attempts: 4,
+                locked_until: Some(Instant::now() + LOGIN_COOLDOWN),
+                edit_locked: false,
+            }),
+        };
+        reset_session(&state).unwrap();
+        let session = state.session.lock().unwrap();
+        assert_eq!(session.failed_attempts, 4);
+        assert!(session.locked_until.is_some());
+        assert!(session.role == SessionRole::Viewer && session.edit_locked);
+    }
+
+    #[test]
+    fn remediation_versions_reject_incomplete_and_noncanonical_inputs_without_panicking() {
+        for value in ["1", "1.2", "1.2.3.4", "01.2.3", "+1.2.3", "1. 2.3"] {
+            assert_eq!(parse_release_version(value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn remediation_local_candidates_are_exclusive_to_variant() {
+        assert!(candidate_from_path(Path::new("礼金簿管理_9.9.9_x64-setup.exe")).is_none());
+        assert!(candidate_from_path(Path::new("礼金簿—改动_0.4.28_x64-setup.exe")).is_some());
+    }
+
+    #[test]
     fn display_path_removes_windows_extended_length_prefix() {
         assert_eq!(
             displayable_path(Path::new(r"\\?\D:\Desktop\礼金簿.xlsx")),
@@ -8372,6 +8626,7 @@ mod tests {
             Path::new(r"C:\Program Files\lijin-book\lijin-book.exe"),
             4242,
             Path::new(r"C:\Users\Updater\updates\update.log"),
+            &"a".repeat(64),
         );
 
         assert!(script.contains(
@@ -9872,10 +10127,10 @@ mod tests {
     #[test]
     fn local_update_selection_only_accepts_a_newer_gift_ledger_installer() {
         let candidates = vec![
-            PathBuf::from("礼金簿管理_0.1.0_x64-setup.exe"),
-            PathBuf::from("礼金簿管理_0.2.0_x64-setup.exe"),
+            PathBuf::from("礼金簿—改动_0.1.0_x64-setup.exe"),
+            PathBuf::from("礼金簿—改动_0.2.0_x64-setup.exe"),
             PathBuf::from("其他程序_9.9.9_x64-setup.exe"),
-            PathBuf::from("礼金簿管理_无效版本_x64-setup.exe"),
+            PathBuf::from("礼金簿—改动_无效版本_x64-setup.exe"),
         ];
 
         assert_eq!(
@@ -9887,8 +10142,8 @@ mod tests {
         assert!(latest_local_update(&candidates, "0.2.0").is_none());
 
         let current_release_candidates = vec![
-            PathBuf::from("礼金簿管理_0.3.5_x64-setup.exe"),
-            PathBuf::from("礼金簿管理_0.3.6_x64-setup.exe"),
+            PathBuf::from("礼金簿—改动_0.3.5_x64-setup.exe"),
+            PathBuf::from("礼金簿—改动_0.3.6_x64-setup.exe"),
         ];
         assert_eq!(
             latest_local_update(&current_release_candidates, "0.3.5")

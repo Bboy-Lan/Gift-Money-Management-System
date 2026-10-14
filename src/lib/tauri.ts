@@ -37,6 +37,7 @@ function createApi(invoke: typeof import("@tauri-apps/api/core").invoke) { retur
   resetAppPinWithRecovery: (recovery: string, newPin: string) => invoke<string>("reset_app_pin_with_recovery", { recovery, newPin }),
   changeAppAdminPin: (oldPin: string, newPin: string) => invoke<string>("change_app_admin_pin", { oldPin, newPin }),
   localUpdateStatus: () => invoke<LocalUpdateStatus>("local_update_status"),
+  officialReleaseStatus: () => invoke<LocalUpdateStatus>("official_release_status"),
   openLocalUpdateDirectory: () => invoke<void>("open_local_update_directory"),
   startLocalUpdate: () => invoke<void>("start_local_update"),
   settingsStorageInfo: () => invoke<SettingsStorageInfo>("settings_storage_info"),

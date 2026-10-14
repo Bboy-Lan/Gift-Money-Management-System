@@ -50,27 +50,30 @@ test("settings exposes a persisted default folder and the backend applies it to 
   assert.match(rust, /choose_spreadsheet_paths\(app: tauri::AppHandle\)/);
 });
 
-test("settings has a general/about split and a confirmed GitHub update flow", async () => {
-  const [app, api, rust, releaseNotes] = await Promise.all([
+test("settings has a general/about split and only installs a verified local variant package", async () => {
+  const [app, api, rust, updateSecurity, releaseNotes] = await Promise.all([
     readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
     readFile(new URL("../src/lib/tauri.ts", import.meta.url), "utf8"),
     readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8"),
+    readFile(new URL("../src-tauri/src/update_security.rs", import.meta.url), "utf8"),
     readFile(new URL("../src/releaseNotes.ts", import.meta.url), "utf8"),
   ]);
 
   assert.match(app, /设置分类/);
   assert.match(app, /通用/);
   assert.match(app, /关于/);
-  assert.match(app, /确认下载并安装/);
-  assert.match(app, /window\.confirm/);
+  assert.match(app, /手动查看官方信息 \/ 本地更新/);
+  assert.match(app, /确认安装本地改动版/);
+  assert.match(app, /原版不适用于改动版/);
   assert.match(app, /candidate\.releaseNotes/);
   assert.match(app, /Gift-Money-Management-System/);
   assert.match(api, /licenseText: \(\) => invoke<string>\("license_text"\)/);
+  assert.match(api, /officialReleaseStatus: \(\) => invoke<LocalUpdateStatus>\("official_release_status"\)/);
   assert.match(rust, /Gift-Money-Management-System\/releases\/latest/);
-  assert.match(rust, /SHA256SUMS\.txt/);
+  assert.match(updateSecurity, /只允许安装目录中更高版本的改动版安装包/);
   assert.match(rust, /release_notes: release\.body\.clone\(\)/);
-  assert.match(releaseNotes, /## 0\.4\.3/);
-  assert.match(rust, /GITHUB_UPDATE_INSTALLER_PREFIX/);
+  assert.match(releaseNotes, /## 0\.4\.27/);
+  assert.doesNotMatch(rust, /browser_download_url/);
 });
 
 test("settings navigation is horizontal and local-mode popover keeps only mode and continuous registration", async () => {
