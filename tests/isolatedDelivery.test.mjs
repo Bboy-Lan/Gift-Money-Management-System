@@ -5,6 +5,7 @@ import { resolve, join } from "node:path";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { assertBoundDirectory, isolatedBuildEnv, prepareRelease, releasePaths } from "../scripts/release-preparation.mjs";
 const root = resolve(import.meta.dirname, "..");
+await mkdir(join(root, "src-tauri/target"), { recursive: true });
 
 test("isolated delivery versions, identity, offline policy and CSP", async () => {
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));

@@ -49,6 +49,7 @@ function Assert-PortableTarget([string]$Root, [string]$Target, [string]$Product)
 function Invoke-ReleaseShortcut([string]$Root, [string]$Executable, [string]$Desktop, [string]$Archive) {
     $product = [string]::Concat([char]0x793c, [char]0x91d1, [char]0x7c3f)
     $Root = [IO.Path]::GetFullPath($Root)
+    if ($Root -ne [IO.Path]::GetPathRoot($Root)) { $Root = $Root.TrimEnd([char[]]@('\', '/')) }
     if (!$Desktop) { $Desktop = [Environment]::GetFolderPath('Desktop') }
     $defaultArchive = Join-Path ([IO.Directory]::GetParent($Root).FullName) ($product + [char]0x5f52 + [char]0x6863 + '/shortcuts')
     if (!$Archive) { $Archive = $defaultArchive }

@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm, readdir, symlink } from "node:fs/promise
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 const project = resolve(import.meta.dirname, "..");
+await mkdir(join(project, "src-tauri/target"), { recursive: true });
 const quote = value => "'" + value.replaceAll("'", "''") + "'";
 function ps(script) {
   return spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", Buffer.from("$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " + script, "utf16le").toString("base64")], { encoding:"utf8", windowsHide:true });
@@ -39,5 +40,20 @@ test("shortcut replaces fixed name recoverably and points real COM link to versi
     const linkedDesktop = join(root,"linked-desktop"); await symlink(desktop, linkedDesktop, "junction");
     result = ps(setup + invoke.replace(quote(desktop),quote(linkedDesktop)));
     assert.notEqual(result.status,0); assert.match(result.stderr,/reparse|link/i);
+    const parent = join(root,"default-archive-fixture"), nestedRoot = join(parent,"project"), nestedDesktop = join(parent,"desktop");
+    const nestedExe = join(nestedRoot,"release/0.4.29/礼金簿.exe"), siblingArchive = join(parent,"礼金簿归档/shortcuts");
+    await mkdir(join(nestedRoot,"release/0.4.29"),{recursive:true}); await mkdir(nestedDesktop); await writeFile(nestedExe,"fixture");
+    result = ps(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut(${quote(join(nestedDesktop,"礼金簿.lnk"))}); $s.TargetPath=${quote(external)}; $s.Save(); `);
+    assert.equal(result.status,0,result.stderr);
+    for (const [index, suffix] of ["\\", "/", ""].entries()) {
+      result = ps(setup + `Invoke-ReleaseShortcut -Root ${quote(nestedRoot + suffix)} -Executable ${quote(nestedExe)} -Desktop ${quote(nestedDesktop)}; `);
+      assert.equal(result.status,0,result.stderr);
+      const backups = await readdir(siblingArchive).catch(error => { assert.fail(`Expected sibling archive for root suffix ${JSON.stringify(suffix)}: ${error.message}`); });
+      assert.equal(backups.length,index + 1);
+      assert.ok(!(await readdir(nestedRoot)).includes("礼金簿归档"));
+      result = ps(`$s=(New-Object -ComObject WScript.Shell).CreateShortcut(${quote(join(nestedDesktop,"礼金簿.lnk"))}); Write-Output $s.TargetPath; $s=(New-Object -ComObject WScript.Shell).CreateShortcut(${quote(join(siblingArchive,backups[0]))}); Write-Output $s.TargetPath; `);
+      assert.equal(result.status,0,result.stderr); assert.ok(result.stdout.includes(nestedExe));
+      if (index === 0) assert.ok(result.stdout.includes(external));
+    }
   } finally { await rm(root,{recursive:true,force:true}); }
 });

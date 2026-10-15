@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import * as delivery from "../scripts/build-installers.mjs";
+await mkdir(resolve(import.meta.dirname, "../src-tauri/target"), { recursive: true });
 test("two bundle modes preserve distinct installer signatures before NSIS overwrites its output", async () => {
   const root = await mkdtemp(join(resolve(import.meta.dirname, "../src-tauri/target"), "bundles-test-"));
   try {
