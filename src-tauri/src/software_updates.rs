@@ -760,8 +760,8 @@ mod tests {
     #[test]
     fn manifests_require_variant_identity_stable_and_newer_three_part_version() {
         let valid = json!({"productId":"com.codex.lijinbook.remediation", "channel":"stable"});
-        assert!(super::validate_manifest(&valid, "0.4.29").is_ok());
-        for version in ["0.4.27", "0.4.28", "0.4", "0.4.29-beta.1"] {
+        assert!(super::validate_manifest(&valid, "0.4.30").is_ok());
+        for version in ["0.4.27", "0.4.28", "0.4.29", "0.4", "0.4.30-beta.1"] {
             assert!(
                 super::validate_manifest(&valid, version).is_err(),
                 "{version}"
@@ -769,12 +769,12 @@ mod tests {
         }
         assert!(super::validate_manifest(
             &json!({"productId":"original", "channel":"stable"}),
-            "0.4.29"
+            "0.4.30"
         )
         .is_err());
         assert!(super::validate_manifest(
             &json!({"productId":"com.codex.lijinbook.remediation", "channel":"beta"}),
-            "0.4.29"
+            "0.4.30"
         )
         .is_err());
     }

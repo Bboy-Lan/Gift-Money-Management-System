@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, symlink } from "node:fs/promises";
 import { resolve, join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { assertBoundDirectory, isolatedBuildEnv, prepareRelease, releasePaths } from "../scripts/release-preparation.mjs";
 const root = resolve(import.meta.dirname, "..");
 
@@ -10,7 +10,7 @@ test("isolated delivery versions, identity, offline policy and CSP", async () =>
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const config = JSON.parse(await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"));
   const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
-  assert.equal(pkg.version, "0.4.28");
+  assert.equal(pkg.version, "0.4.29");
   assert.equal(config.version, pkg.version);
   assert.ok(cargo.includes(`version = "${pkg.version}"`));
   assert.equal(pkg.devDependencies.jsdom, "26.1.0");
@@ -19,7 +19,9 @@ test("isolated delivery versions, identity, offline policy and CSP", async () =>
   assert.equal(config.identifier, "com.codex.lijinbook.remediation");
   assert.equal(config.bundle.windows.nsis.installMode, "currentUser");
   assert.deepEqual(config.bundle.fileAssociations ?? [], []);
-  assert.equal(config.bundle.windows.webviewInstallMode.type, "fixedRuntime");
+  assert.equal(config.bundle.windows.webviewInstallMode.type, "embedBootstrapper");
+  const overlay = JSON.parse(await readFile(join(root, "src-tauri/tauri.offline.conf.json"), "utf8"));
+  assert.deepEqual(overlay.bundle.windows.webviewInstallMode, { type: "fixedRuntime", path: "webview2-fixed" });
   const channels = JSON.parse(await readFile(join(root, "update-channels.json"), "utf8"));
   assert.equal(config.plugins.updater.pubkey, channels.publicKey);
   assert.equal(config.plugins.updater.requireSignedVersion, true);
@@ -53,31 +55,48 @@ test("release paths and build environment ignore inherited redirection", () => {
   }
 });
 
-test("safe preparation copies complete runtime and hashes files, refuses repeated version", async () => {
+test("safe preparation preserves both signed installers without loose runtime, refuses repeated version", async () => {
   const fixture = await mkdtemp(join(root, "src-tauri/target/delivery-test-"));
   try {
     const built = join(fixture, "src-tauri/target/release");
     await mkdir(join(built, "bundle/nsis"), { recursive: true });
-    await mkdir(join(fixture, "src-tauri/webview2-fixed"), { recursive: true });
     await writeFile(join(built, "礼金簿.exe"), "exe");
     await writeFile(join(built, "bundle/nsis/礼金簿_0.4.27_x64-setup.exe"), "installer");
-    const signature = Buffer.from("untrusted comment: test\nRWQx\ntrusted comment: test\nAAAA\n").toString("base64");
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const id = Buffer.from("12345678"), comment = "version:0.4.27";
+    const signing = bytes => {
+      const sig = sign(null, Buffer.from(bytes), privateKey);
+      return Buffer.from(`untrusted comment: fixture\n${Buffer.concat([Buffer.from("Ed"), id, sig]).toString("base64")}\ntrusted comment: ${comment}\n${sign(null, Buffer.concat([sig, Buffer.from(comment)]), privateKey).toString("base64")}\n`).toString("base64");
+    };
+    const key = Buffer.from(`untrusted comment: fixture\n${Buffer.concat([Buffer.from("Ed"), id, publicKey.export({type:"spki",format:"der"}).subarray(-32)]).toString("base64")}\n`).toString("base64");
+    await writeFile(join(fixture, "update-channels.json"), JSON.stringify({ publicKey: key }));
+    const signature = signing("installer");
     await writeFile(join(built, "bundle/nsis/礼金簿_0.4.27_x64-setup.exe.sig"), signature);
-    await writeFile(join(fixture, "src-tauri/webview2-fixed/msedgewebview2.exe"), "runtime");
-    await writeFile(join(fixture, "src-tauri/webview2-fixed/icudtl.dat"), "runtime dependency");
+    await writeFile(join(built, "bundle/nsis/礼金簿_0.4.27_x64-offline-setup.exe"), "offline installer");
+    await writeFile(join(built, "bundle/nsis/礼金簿_0.4.27_x64-offline-setup.exe.sig"), signing("offline installer"));
+    const offlinePath = join(built, "bundle/nsis/礼金簿_0.4.27_x64-offline-setup.exe");
+    await rm(offlinePath);
+    await assert.rejects(prepareRelease(fixture, "0.4.27", "notes"), /ENOENT/);
+    await writeFile(offlinePath, "corrupted");
+    await assert.rejects(prepareRelease(fixture, "0.4.27", "notes"), /signature/i);
+    assert.ok(!(await readdir(fixture)).includes("release"));
+    await writeFile(offlinePath, "offline installer");
     const result = await prepareRelease(fixture, "0.4.27", "notes");
-    assert.equal(await readFile(join(result, "webview2-fixed/icudtl.dat"), "utf8"), "runtime dependency");
+    assert.ok(!(await readdir(result)).includes("webview2-fixed"));
+    assert.equal(await readFile(join(result, "礼金簿_0.4.27_x64-offline-setup.exe"), "utf8"), "offline installer");
     const hashes = await readFile(join(result, "SHA256SUMS.txt"), "utf8");
     assert.ok(hashes.includes(createHash("sha256").update("installer").digest("hex").toUpperCase()));
+    assert.ok(hashes.includes(createHash("sha256").update("offline installer").digest("hex").toUpperCase() + "  Gift-Money-Management-System_0.4.27_x64-offline-setup.exe"));
     const manifest = JSON.parse(await readFile(join(result, "latest.json"), "utf8"));
     assert.equal(manifest.platforms["lijinbook-remediation-windows-x86_64"].signature, signature);
+    assert.equal(manifest.platforms["lijinbook-remediation-windows-x86_64"].url, "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases/download/v0.4.27/Gift-Money-Management-System_0.4.27_x64-setup.exe");
     await assert.rejects(prepareRelease(fixture, "0.4.27", "replacement"), /existing|overwrite/);
     assert.equal(await readFile(join(result, "RELEASE_NOTES.md"), "utf8"), "notes");
-    assert.deepEqual((await readdir(fixture)).sort(), ["release", "src-tauri"]);
+    assert.deepEqual((await readdir(fixture)).sort(), ["release", "src-tauri", "update-channels.json"]);
   } finally { await rm(fixture, { recursive: true, force: true }); }
 });
 
-test("missing fixed runtime fails without creating final artifacts", async () => {
+test("missing build inputs fail without creating final artifacts", async () => {
   const fixture = await mkdtemp(join(root, "src-tauri/target/delivery-test-"));
   try {
     await assert.rejects(prepareRelease(fixture, "0.4.27", "notes"), /runtime|ENOENT/);
@@ -93,6 +112,7 @@ test("linked release destination is rejected before writing final artifacts", as
     try { await symlink(outside, linked, "junction"); }
     catch (error) { t.skip(`junction unavailable: ${error.code ?? error.message}`); return; }
     await assert.rejects(assertBoundDirectory(fixture, linked), /Linked paths|escapes project boundary/);
+    await assert.rejects(prepareRelease(fixture, "0.4.29", "notes"), /Linked paths|escapes project boundary/);
     assert.deepEqual(await readdir(outside), []);
   } finally {
     await rm(fixture, { recursive: true, force: true });

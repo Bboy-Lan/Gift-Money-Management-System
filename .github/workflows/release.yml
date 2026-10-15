@@ -20,4 +20,5 @@ jobs:
         run: npm.cmd run verify
       # No upload or GitHub Release step. Offline user installers require an
       # explicitly pre-provisioned fixed WebView2 runtime and release:local.
-      # Never substitute an online bootstrapper or original-product asset name.
+      # Standard uses the configured online bootstrapper; offline uses the overlay.
+      # Both retain this product's own asset names. No automatic upload.

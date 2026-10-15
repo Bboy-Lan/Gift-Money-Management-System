@@ -139,12 +139,22 @@ fn embedded_webview_runtime_directory(executable: &Path) -> Option<PathBuf> {
     .find(|directory| directory.join("msedgewebview2.exe").is_file())
 }
 
+fn selected_webview_runtime(executable: &Path, system_available: bool) -> Option<PathBuf> {
+    if system_available {
+        None
+    } else {
+        embedded_webview_runtime_directory(executable)
+    }
+}
+
 #[cfg(windows)]
 fn configure_embedded_webview_runtime() {
+    std::env::remove_var("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER");
+    let system_available = tauri::webview_version().is_ok();
     let Ok(executable) = std::env::current_exe() else {
         return;
     };
-    let Some(runtime) = embedded_webview_runtime_directory(&executable) else {
+    let Some(runtime) = selected_webview_runtime(&executable, system_available) else {
         return;
     };
     std::env::set_var("WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", runtime);
@@ -8581,8 +8591,8 @@ mod tests {
     #[test]
     fn remediation_local_candidates_are_exclusive_to_variant() {
         assert!(candidate_from_path(Path::new("礼金簿管理_9.9.9_x64-setup.exe")).is_none());
-        assert!(candidate_from_path(Path::new("礼金簿_0.4.29_x64-setup.exe")).is_some());
-        assert!(candidate_from_path(Path::new("礼金簿—改动_0.4.29_x64-setup.exe")).is_none());
+        assert!(candidate_from_path(Path::new("礼金簿_0.4.30_x64-setup.exe")).is_some());
+        assert!(candidate_from_path(Path::new("礼金簿—改动_0.4.30_x64-setup.exe")).is_none());
     }
 
     #[test]
@@ -8609,6 +8619,11 @@ mod tests {
         std::fs::write(portable_runtime.join("msedgewebview2.exe"), b"runtime")
             .expect("portable runtime marker");
         let executable = root.join("lijin-book.exe");
+        assert_eq!(selected_webview_runtime(&executable, true), None);
+        assert_eq!(
+            selected_webview_runtime(&executable, false),
+            Some(portable_runtime.clone())
+        );
         assert_eq!(
             embedded_webview_runtime_directory(&executable),
             Some(portable_runtime.clone())
@@ -8625,6 +8640,7 @@ mod tests {
             Some(installed_runtime)
         );
         std::fs::remove_dir_all(root).expect("remove runtime test directory");
+        assert_eq!(selected_webview_runtime(&executable, false), None);
     }
 
     #[test]

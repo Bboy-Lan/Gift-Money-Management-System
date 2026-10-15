@@ -1,7 +1,8 @@
 import { createHash, createPublicKey, verify } from "node:crypto";
 
 export const repository = "Bboy-Lan/Gift-Money-Management-System";
-export const releaseInstallerName = version => `Gift-Money-Management-System_${version}_x64-setup.exe`;
+export const releaseInstallerName = (version, offline = false) => `Gift-Money-Management-System_${version}_x64${offline ? "-offline" : ""}-setup.exe`;
+export const localInstallerName = (version, offline = false) => `礼金簿_${version}_x64${offline ? "-offline" : ""}-setup.exe`;
 // Independent release-time check of Minisign's Ed25519 artifact and comment signatures.
 // The client continues to use the official Tauri verifier, not this helper.
 export function verifyUpdateSignature(bytes, encodedSignature, encodedKey, expectedVersion) {

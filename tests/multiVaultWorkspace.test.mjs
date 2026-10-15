@@ -71,7 +71,8 @@ test("礼金簿 display name retains an isolated application identity", async ()
   assert.match(config, /"mainBinaryName": "礼金簿"/);
   assert.match(config, /"identifier": "com\.codex\.lijinbook\.remediation"/);
   assert.match(release, /const executable = "礼金簿\.exe"/);
-  assert.match(release, /礼金簿_" \+ version \+ "_x64-setup\.exe/);
+  const { localInstallerName } = await import("../scripts/update-manifest.mjs");
+  assert.equal(localInstallerName("0.4.29"), "礼金簿_0.4.29_x64-setup.exe");
 });
 
 test("gift-book editing is independent from vault editing and preserves source metadata", async () => {
