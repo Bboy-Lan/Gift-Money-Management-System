@@ -13,6 +13,7 @@ ui-dev-check.png
 # Internal agent/session and audit artifacts are not part of the public source release.
 AGENTS.md
 audit-report.md
+礼金簿全面审查报告.md
 findings.md
 progress.md
 remediation-log.md
