@@ -19,3 +19,6 @@ remediation-log.md
 remediation-plan.md
 task_plan.md
 docs/
+.local-signing/
+release/
+outputs/

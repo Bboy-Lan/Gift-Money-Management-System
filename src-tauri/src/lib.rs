@@ -18,6 +18,7 @@ use uuid::Uuid;
 mod app_security;
 mod models;
 mod single_instance;
+mod software_updates;
 mod update_security;
 
 use app_security::{validate_pin, AppSecurityStore};
@@ -41,7 +42,7 @@ fn with_operation<T>(operation: impl FnOnce() -> Result<T, String>) -> Result<T,
 const LOGIN_COOLDOWN: Duration = Duration::from_secs(30);
 const MAX_LOGIN_ATTEMPTS: u8 = 5;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const UPDATE_INSTALLER_PREFIX: &str = "礼金簿—改动_";
+const UPDATE_INSTALLER_PREFIX: &str = "礼金簿_";
 const GITHUB_UPDATE_INSTALLER_PREFIX: &str = "Gift-Money-Management-System_";
 const UPDATE_INSTALLER_SUFFIX: &str = "_x64-setup.exe";
 const GITHUB_RELEASE_API: &str =
@@ -207,14 +208,6 @@ fn file_dialog_for_app(app: &tauri::AppHandle) -> FileDialog {
     configured_data_directory(app)
         .map(|directory| FileDialog::new().set_directory(directory))
         .unwrap_or_else(default_file_dialog)
-}
-
-fn installed_application_path() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir)
-        .join("礼金簿—改动")
-        .join("礼金簿—改动.exe")
 }
 
 #[tauri::command]
@@ -2165,7 +2158,8 @@ try {{
   if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -ne '{expected_hash}') {{
     throw 'Prepared installer integrity check failed.'
   }}
-  $process = Start-Process -FilePath $installer -ArgumentList @('/S') -Wait -PassThru -WindowStyle Hidden
+  $installDirectory = Split-Path -Parent $installedApplication
+  $process = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDirectory") -Wait -PassThru -WindowStyle Hidden
   $exitCode = $process.ExitCode
   Add-Content -LiteralPath $log -Value "$(Get-Date -Format o) installer exit code: $exitCode"
   if ($exitCode -ne 0) {{
@@ -2256,7 +2250,13 @@ fn start_local_update(app: tauri::AppHandle) -> Result<(), String> {
         &update_runtime_directory(),
     )?;
     let application = std::env::current_exe().map_err(|e| format!("无法确定当前程序位置: {e}"))?;
-    let installed_application = installed_application_path();
+    if !application
+        .parent()
+        .is_some_and(|directory| directory.join("uninstall.exe").is_file())
+    {
+        return Err("便携运行请手动下载安装包".into());
+    }
+    let installed_application = application.clone();
     launch_local_update(
         &installer,
         &installed_application,
@@ -8269,6 +8269,8 @@ pub fn run() {
     };
     configure_embedded_webview_runtime();
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().pubkey("").build())
+        .manage(software_updates::SoftwareUpdates::default())
         .setup(|app| {
             if let Err(error) = ensure_published_update_directory(app.handle()) {
                 eprintln!("无法初始化桌面发布目录: {error}");
@@ -8286,6 +8288,12 @@ pub fn run() {
             choose_vault_path_named,
             choose_comparison_vault_paths,
             local_update_status,
+            software_updates::software_update_status,
+            software_updates::software_update_options,
+            software_updates::prepare_software_update,
+            software_updates::apply_software_update,
+            software_updates::acknowledge_software_update,
+            software_updates::open_download_channel,
             open_local_update_directory,
             start_local_update,
             official_release_status,
@@ -8573,7 +8581,8 @@ mod tests {
     #[test]
     fn remediation_local_candidates_are_exclusive_to_variant() {
         assert!(candidate_from_path(Path::new("礼金簿管理_9.9.9_x64-setup.exe")).is_none());
-        assert!(candidate_from_path(Path::new("礼金簿—改动_0.4.28_x64-setup.exe")).is_some());
+        assert!(candidate_from_path(Path::new("礼金簿_0.4.29_x64-setup.exe")).is_some());
+        assert!(candidate_from_path(Path::new("礼金簿—改动_0.4.29_x64-setup.exe")).is_none());
     }
 
     #[test]
@@ -10127,10 +10136,10 @@ mod tests {
     #[test]
     fn local_update_selection_only_accepts_a_newer_gift_ledger_installer() {
         let candidates = vec![
-            PathBuf::from("礼金簿—改动_0.1.0_x64-setup.exe"),
-            PathBuf::from("礼金簿—改动_0.2.0_x64-setup.exe"),
+            PathBuf::from("礼金簿_0.1.0_x64-setup.exe"),
+            PathBuf::from("礼金簿_0.2.0_x64-setup.exe"),
             PathBuf::from("其他程序_9.9.9_x64-setup.exe"),
-            PathBuf::from("礼金簿—改动_无效版本_x64-setup.exe"),
+            PathBuf::from("礼金簿_无效版本_x64-setup.exe"),
         ];
 
         assert_eq!(
@@ -10142,8 +10151,8 @@ mod tests {
         assert!(latest_local_update(&candidates, "0.2.0").is_none());
 
         let current_release_candidates = vec![
-            PathBuf::from("礼金簿—改动_0.3.5_x64-setup.exe"),
-            PathBuf::from("礼金簿—改动_0.3.6_x64-setup.exe"),
+            PathBuf::from("礼金簿_0.3.5_x64-setup.exe"),
+            PathBuf::from("礼金簿_0.3.6_x64-setup.exe"),
         ];
         assert_eq!(
             latest_local_update(&current_release_candidates, "0.3.5")

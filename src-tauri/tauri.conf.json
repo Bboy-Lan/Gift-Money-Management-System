@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "礼金簿—改动",
-  "mainBinaryName": "礼金簿—改动",
-  "version": "0.4.27",
+  "productName": "礼金簿",
+  "mainBinaryName": "礼金簿",
+  "version": "0.4.28",
   "identifier": "com.codex.lijinbook.remediation",
   "build": {
     "beforeDevCommand": "npm.cmd run dev",
@@ -13,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "礼金簿—改动",
+        "title": "礼金簿",
         "width": 1440,
         "height": 900,
         "minWidth": 1120,
@@ -32,6 +32,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis"],
     "windows": {
       "nsis": { "installMode": "currentUser", "displayLanguageSelector": false },
@@ -40,5 +41,8 @@
         "path": "webview2-fixed"
       }
     }
+  },
+  "plugins": {
+    "updater": { "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGMTE2Mjg4ODBENTIxNjMKUldSaklkV0FpR0lSSDVETFRpV1VzaHM3Tk56NGxqUHVEdXh3TVl5RnVabjA5RlBKNTB6SXNNYkEK", "requireSignedVersion": true, "windows": { "installMode": "passive" } }
   }
 }

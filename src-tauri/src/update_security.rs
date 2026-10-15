@@ -7,11 +7,11 @@ pub fn validate_identity(value: &str, version: &str) -> Result<(), String> {
         serde_json::from_str(value).map_err(|_| "无法读取安装包产品元数据，已拒绝安装")?;
     let product = info.get("ProductName").and_then(|v| v.as_str());
     let actual = info.get("ProductVersion").and_then(|v| v.as_str());
-    if product != Some("礼金簿—改动")
+    if product != Some("礼金簿")
         || !actual.is_some_and(|v| v == version || v == format!("{version}.0"))
     {
         return Err(
-            "安装包产品或版本不匹配：仅支持礼金簿—改动离线包；不能安装原版或缺少元数据的包"
+            "安装包产品或版本不匹配：仅支持礼金簿当前通道安装包；不能安装其他产品或缺少元数据的包"
                 .to_string(),
         );
     }
@@ -154,7 +154,7 @@ mod tests {
             assert!(validate_identity(value, "0.4.28").is_err(), "{value}");
         }
         assert!(validate_identity(
-            r#"{"ProductName":"礼金簿—改动","ProductVersion":"0.4.28"}"#,
+            r#"{"ProductName":"礼金簿","ProductVersion":"0.4.28"}"#,
             "0.4.28"
         )
         .is_ok());

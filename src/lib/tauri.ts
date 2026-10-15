@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { Channel } from "@tauri-apps/api/core";
+import type { SoftwareUpdateStatus, UpdateProgress } from "../types";
 import type { AuditLog, BookStat, BookSummary, ComparisonBook, ComparisonBookEntry, ComparisonBookRef, ComparisonPerson, ComparisonPersonHistory, ComparisonPersonRef, GiftBook, GiftEntry, LocalUpdateStatus, Person, PersonHistory, ReturnGiftRecord, SearchResponse, SessionStatus, SettingsStorageInfo, Tag, TrashItem, VaultInfo, VaultOpenResult } from "../types";
 
 const SCOPED_COMMANDS = new Set([
@@ -40,6 +42,12 @@ function createApi(invoke: typeof import("@tauri-apps/api/core").invoke) { retur
   officialReleaseStatus: () => invoke<LocalUpdateStatus>("official_release_status"),
   openLocalUpdateDirectory: () => invoke<void>("open_local_update_directory"),
   startLocalUpdate: () => invoke<void>("start_local_update"),
+  softwareUpdateOptions: () => invoke<SoftwareUpdateStatus>("software_update_options"),
+  softwareUpdateStatus: (force: boolean) => invoke<SoftwareUpdateStatus>("software_update_status", { force }),
+  prepareSoftwareUpdate: (candidateId: string, progress: Channel<UpdateProgress>) => invoke<void>("prepare_software_update", { candidateId, progress }),
+  applySoftwareUpdate: (candidateId: string) => invoke<void>("apply_software_update", { candidateId }),
+  acknowledgeSoftwareUpdate: () => invoke<string | null>("acknowledge_software_update"),
+  openDownloadChannel: (channelId: string) => invoke<void>("open_download_channel", { channelId }),
   settingsStorageInfo: () => invoke<SettingsStorageInfo>("settings_storage_info"),
   chooseSettingsDirectory: () => invoke<SettingsStorageInfo | null>("choose_settings_directory"),
   licenseText: () => invoke<string>("license_text"),

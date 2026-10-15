@@ -62,6 +62,35 @@ export interface SettingsStorageInfo {
   configured: boolean;
 }
 
+export interface DownloadChannel {
+  id: "cloud" | "github" | "lanzou" | "baidu";
+  label: string;
+  url: string | null;
+}
+
+export interface SoftwareCandidate {
+  id: string;
+  version: string;
+  source: "cloud" | "github" | "local";
+  releaseNotes: string | null;
+}
+
+export interface SoftwareUpdateStatus {
+  currentVersion: string;
+  configured: boolean;
+  installed: boolean;
+  checkedAt: string | null;
+  candidate: SoftwareCandidate | null;
+  channels: DownloadChannel[];
+  error: string | null;
+}
+
+export interface UpdateProgress {
+  phase: "downloading" | "verifying";
+  received: number;
+  total: number | null;
+}
+
 export interface GiftBook {
   id: string;
   title: string;

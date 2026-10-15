@@ -62,11 +62,13 @@ test("settings has a general/about split and only installs a verified local vari
   assert.match(app, /设置分类/);
   assert.match(app, /通用/);
   assert.match(app, /关于/);
-  assert.match(app, /手动查看官方信息 \/ 本地更新/);
-  assert.match(app, /确认安装本地改动版/);
-  assert.match(app, /原版不适用于改动版/);
-  assert.match(app, /candidate\.releaseNotes/);
-  assert.match(app, /Gift-Money-Management-System/);
+  assert.match(app, /useSoftwareUpdates/);
+  assert.match(app, /<AboutSettings/);
+  const about = await readFile(new URL("../src/components/AboutSettings.tsx", import.meta.url), "utf8");
+  assert.match(about, /candidate\.releaseNotes/);
+  assert.match(about, /暂未配置/);
+  assert.match(api, /prepareSoftwareUpdate/);
+  assert.match(api, /applySoftwareUpdate/);
   assert.match(api, /licenseText: \(\) => invoke<string>\("license_text"\)/);
   assert.match(api, /officialReleaseStatus: \(\) => invoke<LocalUpdateStatus>\("official_release_status"\)/);
   assert.match(rust, /Gift-Money-Management-System\/releases\/latest/);

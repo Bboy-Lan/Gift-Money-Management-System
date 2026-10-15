@@ -18,7 +18,7 @@ try {
   run(process.execPath, ["--test", "tests/*.test.mjs"]);
   run("cargo", ["fmt", "--manifest-path", "src-tauri/Cargo.toml", "--", "--check"]);
   run("cargo", ["test", "--locked", "--offline", "--manifest-path", "src-tauri/Cargo.toml"]);
-  run("cargo", ["clippy", "--locked", "--offline", "--manifest-path", "src-tauri/Cargo.toml", "--all-targets"]);
+  run("cargo", ["clippy", "--locked", "--offline", "--manifest-path", "src-tauri/Cargo.toml", "--all-targets", "--", "-D", "warnings"]);
   run(process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "npm.cmd run build"]);
 } finally {
   await assertBoundDirectory(target, profile);

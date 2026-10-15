@@ -63,15 +63,15 @@ test("comparison defaults to the active vault and adds historical sources only w
   assert.match(source, /if \(!selected\.length\) return/);
 });
 
-test("isolated product uses the 礼金簿—改动 executable and installer names", async () => {
+test("礼金簿 display name retains an isolated application identity", async () => {
   const config = await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8");
   const release = await readFile(new URL("../scripts/release-preparation.mjs", import.meta.url), "utf8");
 
-  assert.match(config, /"productName": "礼金簿—改动"/);
-  assert.match(config, /"mainBinaryName": "礼金簿—改动"/);
+  assert.match(config, /"productName": "礼金簿"/);
+  assert.match(config, /"mainBinaryName": "礼金簿"/);
   assert.match(config, /"identifier": "com\.codex\.lijinbook\.remediation"/);
-  assert.match(release, /const executable = "礼金簿—改动\.exe"/);
-  assert.match(release, /礼金簿—改动_" \+ version \+ "_x64-setup\.exe/);
+  assert.match(release, /const executable = "礼金簿\.exe"/);
+  assert.match(release, /礼金簿_" \+ version \+ "_x64-setup\.exe/);
 });
 
 test("gift-book editing is independent from vault editing and preserves source metadata", async () => {

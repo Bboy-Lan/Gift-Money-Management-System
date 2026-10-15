@@ -1,0 +1,32 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { generateKeyPairSync, sign, createHash } from "node:crypto";
+const { createUpdateManifest, verifyUpdateSignature } = await import("../scripts/update-manifest.mjs");
+const signature = Buffer.from("untrusted comment: test\nRWQx\ntrusted comment: test\nAAAA\n").toString("base64");
+test("manifest binds the signed installer to the stable product and exact release", () => {
+  const manifest = createUpdateManifest("0.4.28", "说明", signature, "2026-10-15T00:00:00Z");
+  assert.equal(manifest.productId, "com.codex.lijinbook.remediation");
+  assert.equal(manifest.channel, "stable");
+  const platform = manifest.platforms["lijinbook-remediation-windows-x86_64"];
+  assert.equal(platform.signature, signature);
+  assert.equal(platform.url, "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases/download/v0.4.28/Gift-Money-Management-System_0.4.28_x64-setup.exe");
+  assert.throws(() => createUpdateManifest("../bad", "说明", signature), /version/i);
+  assert.throws(() => createUpdateManifest("0.4.28", "说明", ""), /signature/i);
+  assert.throws(() => createUpdateManifest("0.4.28", "说明", "not-signature"), /signature/i);
+});
+test("release gate verifies artifact and trusted comment, rejects corrupted bytes", () => {
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const id = Buffer.from("12345678");
+  const pub = Buffer.concat([Buffer.from("Ed"), id, publicKey.export({ type: "spki", format: "der" }).subarray(-32)]);
+  const data = Buffer.from("installer fixture");
+  const signature = sign(null, createHash("blake2b512").update(data).digest(), privateKey);
+  const comment = "timestamp:1\tversion:0.4.28";
+  const global = sign(null, Buffer.concat([signature, Buffer.from(comment)]), privateKey);
+  const encoded = Buffer.from(`untrusted comment: test\n${Buffer.concat([Buffer.from("ED"), id, signature]).toString("base64")}\ntrusted comment: ${comment}\n${global.toString("base64")}\n`).toString("base64");
+  const key = Buffer.from(`untrusted comment: test\n${pub.toString("base64")}\n`).toString("base64");
+  assert.equal(verifyUpdateSignature(data, encoded, key), comment);
+  assert.equal(verifyUpdateSignature(data, encoded, key, "0.4.28"), comment);
+  assert.throws(() => verifyUpdateSignature(data, encoded, key, "0.4.29"), /version/i);
+  assert.throws(() => verifyUpdateSignature(Buffer.from("corrupted"), encoded, key), /signature/i);
+  assert.throws(() => verifyUpdateSignature(data, encoded, "bad"), /key/i);
+});
