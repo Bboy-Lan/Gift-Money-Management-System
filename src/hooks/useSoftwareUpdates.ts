@@ -1,7 +1,7 @@
 import { createContext, useCallback, useEffect, useRef, useState } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { api } from "../lib/tauri";
-import { canApplyUpdate, lockUpdateInterface, type UpdatePhase } from "../lib/softwareUpdates";
+import { canApplyUpdate, lockUpdateInterface, manualDownloadMessage, type UpdatePhase } from "../lib/softwareUpdates";
 import type { SoftwareUpdateStatus, UpdateProgress } from "../types";
 
 export function useSoftwareUpdates(options: { beforeInstall: () => void; onNotice: (message: string) => void }) {
@@ -23,9 +23,13 @@ export function useSoftwareUpdates(options: { beforeInstall: () => void; onNotic
       const result = await api.softwareUpdateStatus(force);
       if (!mounted.current) return;
       selected.current = result; setStatus(result); ready.current = null;
-      if (force && !result.candidate && result.error) setError(result.error);
+      if (result.error) setError(manualDownloadMessage(result.error));
     } catch (value) {
-      if (mounted.current && force) setError(String(value));
+      if (mounted.current) {
+        const message = manualDownloadMessage(String(value));
+        setError(message);
+        setStatus(previous => previous ? { ...previous, error: message } : null);
+      }
     } finally {
       busy.current = false;
       if (mounted.current) setPhase("idle");
@@ -59,7 +63,7 @@ export function useSoftwareUpdates(options: { beforeInstall: () => void; onNotic
       setPhase("installing");
       await api.applySoftwareUpdate(candidate.id);
     } catch (value) {
-      if (mounted.current) { setError(String(value)); setPhase(ready.current === candidate.id ? "ready" : "idle"); }
+      if (mounted.current) { setError(ready.current === candidate.id ? String(value) : manualDownloadMessage(String(value))); setPhase(ready.current === candidate.id ? "ready" : "idle"); }
     } finally { unlock?.(); busy.current = false; }
   }, []);
 

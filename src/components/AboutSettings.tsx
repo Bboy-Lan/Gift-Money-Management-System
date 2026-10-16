@@ -1,5 +1,5 @@
 import { useContext } from "react";
-import { ChevronDown, CloudDownload, Download, ExternalLink, Gift, Github, HardDriveDownload, RefreshCw } from "lucide-react";
+import { ChevronDown, Download, ExternalLink, Gift, Github, HardDriveDownload, RefreshCw } from "lucide-react";
 import { SoftwareUpdateContext } from "../hooks/useSoftwareUpdates";
 import { downloadPercent, formatDownloadSize, updateStatusMessage, type UpdatePhase } from "../lib/softwareUpdates";
 import { CURRENT_RELEASE_NOTES } from "../releaseNotes";
@@ -42,11 +42,10 @@ export function AboutSettings(props: Props) {
       <div className="about-update-footnote"><span>最近检查：{props.checkedAt}</span><span>{props.updateStatus?.installed ? "安装版 · 支持一键更新" : "便携运行 · 安装版支持一键更新"}</span></div>
     </section>
 
-    <section className="about-card"><div className="about-section-title"><h4>下载方式</h4><span>选择方便的方式，下载同一个版本</span></div><div className="download-channel-grid">
-      <article className="download-channel-card"><CloudDownload size={21} /><strong>腾讯云</strong><p>{channels.find(item => item.id === "cloud")?.url ? "国内下载入口" : "暂未配置，测试期间无需开通"}</p>{channelButton("cloud", "腾讯云下载")}</article>
+    <section className="about-card"><div className="about-section-title"><h4>下载方式</h4><span>GitHub 无法访问时，可使用网盘手动下载</span></div><div className="download-channel-grid">
       <article className="download-channel-card"><Github size={21} /><strong>GitHub</strong><p>查看正式发布、版本说明与安装包</p>{channelButton("github", "GitHub 下载")}</article>
-      <article className="download-channel-card"><HardDriveDownload size={21} /><strong>网盘</strong><p>浏览器打开分享页，手动下载安装包</p><div className="netdisk-buttons">{channelButton("lanzou", "蓝奏云")}{channelButton("baidu", "百度网盘")}</div></article>
-    </div><p className="about-meta">一键更新会自动下载并安装；通过下载页面获取安装包后，双击安装即可。</p></section>
+      {(["lanzou", "baidu"] as const).map(id => <article className="download-channel-card" key={id}><HardDriveDownload size={21} /><strong>{id === "lanzou" ? "蓝奏云" : "百度网盘"}</strong><p>浏览器打开分享页，手动下载安装包</p><p>提取码：{channels.find(item => item.id === id)?.extractionCode ?? "未提供"}</p>{channelButton(id, id === "lanzou" ? "蓝奏云" : "百度网盘")}</article>)}
+    </div><p className="about-meta">手动安装前，请先保存并退出礼金簿，再运行安装包，保留已有礼金库。网盘文件由人工维护，请核对版本号。</p><p className="about-meta">标准包优先使用系统 WebView2，缺少时需联网补齐；完整离线包自带运行时，适合无网络电脑，业务功能和数据格式相同。</p></section>
 
     {candidate?.releaseNotes && <section className="about-card"><details className="release-notes-details" open><summary>新版本 v{candidate.version} 更新明细</summary><pre>{candidate.releaseNotes}</pre></details></section>}
     <section className="about-card"><details className="release-notes-details" open><summary className="about-card-heading"><div><span className="about-label">当前版本与历史记录</span><strong>更新明细</strong></div><ChevronDown size={16} /></summary><pre>{CURRENT_RELEASE_NOTES}</pre></details></section>

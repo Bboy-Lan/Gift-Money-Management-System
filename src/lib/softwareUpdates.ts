@@ -2,6 +2,10 @@ import type { SoftwareUpdateStatus, UpdateProgress } from "../types";
 
 export type UpdatePhase = "idle" | "checking" | "downloading" | "verifying" | "ready" | "installing";
 
+export function manualDownloadMessage(error: string) {
+  return `${error}；GitHub 无法访问时，可在“关于礼金簿”的下载方式中使用蓝奏云或百度网盘手动下载。`;
+}
+
 export function updateStatusMessage(status: SoftwareUpdateStatus | null) {
   if (!status) return "尚未检查更新";
   if (status.candidate) return `发现新版本 v${status.candidate.version}`;

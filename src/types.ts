@@ -63,15 +63,16 @@ export interface SettingsStorageInfo {
 }
 
 export interface DownloadChannel {
-  id: "cloud" | "github" | "lanzou" | "baidu";
+  id: "github" | "lanzou" | "baidu";
   label: string;
   url: string | null;
+  extractionCode?: string | null;
 }
 
 export interface SoftwareCandidate {
   id: string;
   version: string;
-  source: "cloud" | "github" | "local";
+  source: "github" | "local";
   releaseNotes: string | null;
 }
 

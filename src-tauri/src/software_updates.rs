@@ -26,10 +26,11 @@ struct ChannelConfig {
     product_id: String,
     channel: String,
     public_key: Option<String>,
-    cloud: Endpoint,
     github: Endpoint,
     lanzou_url: Option<String>,
+    lanzou_extraction_code: Option<String>,
     baidu_url: Option<String>,
+    baidu_extraction_code: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -38,6 +39,7 @@ pub struct DownloadChannel {
     id: String,
     label: String,
     url: Option<String>,
+    extraction_code: Option<String>,
 }
 
 impl ChannelConfig {
@@ -47,10 +49,11 @@ impl ChannelConfig {
             product_id: PRODUCT.into(),
             channel: "stable".into(),
             public_key: None,
-            cloud: Endpoint::default(),
             github: Endpoint::default(),
             lanzou_url: None,
+            lanzou_extraction_code: None,
             baidu_url: None,
+            baidu_extraction_code: None,
         }
     }
 
@@ -70,37 +73,32 @@ impl ChannelConfig {
     }
 
     fn endpoints(&self) -> Result<Vec<(&'static str, reqwest::Url)>, String> {
-        [
-            ("cloud", &self.cloud.manifest_url),
-            ("github", &self.github.manifest_url),
-        ]
-        .into_iter()
-        .filter_map(|(id, value)| value.as_ref().map(|value| (id, value)))
-        .map(|(id, value)| validate_https(value).map(|url| (id, url)))
-        .collect()
+        [("github", &self.github.manifest_url)]
+            .into_iter()
+            .filter_map(|(id, value)| value.as_ref().map(|value| (id, value)))
+            .map(|(id, value)| validate_https(value).map(|url| (id, url)))
+            .collect()
     }
 
     fn channels(&self) -> Vec<DownloadChannel> {
         vec![
             DownloadChannel {
-                id: "cloud".into(),
-                label: "腾讯云下载".into(),
-                url: self.cloud.download_url.clone(),
-            },
-            DownloadChannel {
                 id: "github".into(),
                 label: "GitHub 下载".into(),
                 url: self.github.download_url.clone(),
+                extraction_code: None,
             },
             DownloadChannel {
                 id: "lanzou".into(),
                 label: "蓝奏云".into(),
                 url: self.lanzou_url.clone(),
+                extraction_code: self.lanzou_extraction_code.clone(),
             },
             DownloadChannel {
                 id: "baidu".into(),
                 label: "百度网盘".into(),
                 url: self.baidu_url.clone(),
+                extraction_code: self.baidu_extraction_code.clone(),
             },
         ]
     }
@@ -471,14 +469,7 @@ pub async fn software_update_status(
                     // A valid result (including up-to-date) is authoritative; no false fallback.
                     break;
                 }
-                Err(error) => remote_errors.push(format!(
-                    "{}：{error}",
-                    if source == "cloud" {
-                        "腾讯云检查失败"
-                    } else {
-                        "GitHub检查失败"
-                    }
-                )),
+                Err(error) => remote_errors.push(format!("GitHub检查失败：{error}")),
             }
         }
     }
@@ -760,8 +751,15 @@ mod tests {
     #[test]
     fn manifests_require_variant_identity_stable_and_newer_three_part_version() {
         let valid = json!({"productId":"com.codex.lijinbook.remediation", "channel":"stable"});
-        assert!(super::validate_manifest(&valid, "0.4.30").is_ok());
-        for version in ["0.4.27", "0.4.28", "0.4.29", "0.4", "0.4.30-beta.1"] {
+        assert!(super::validate_manifest(&valid, "0.4.31").is_ok());
+        for version in [
+            "0.4.27",
+            "0.4.28",
+            "0.4.29",
+            "0.4.30",
+            "0.4",
+            "0.4.31-beta.1",
+        ] {
             assert!(
                 super::validate_manifest(&valid, version).is_err(),
                 "{version}"
@@ -783,11 +781,39 @@ mod tests {
     fn unconfigured_channels_do_not_advertise_online_installation() {
         let config = super::ChannelConfig::empty();
         assert!(config.endpoints().unwrap().is_empty());
-        assert_eq!(config.channels().len(), 4);
+        assert_eq!(config.channels().len(), 3);
         assert!(config
             .channels()
             .iter()
             .all(|channel| channel.url.is_none()));
+    }
+
+    #[test]
+    fn configured_downloads_expose_only_approved_channels_and_public_codes() {
+        let config = super::ChannelConfig::load().unwrap();
+        let endpoints = config.endpoints().unwrap();
+        assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].0, "github");
+        assert_eq!(endpoints[0].1.as_str(), "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases/latest/download/latest.json");
+        let channels = serde_json::to_value(config.channels()).unwrap();
+        assert_eq!(channels.as_array().unwrap().len(), 3);
+        assert_eq!(channels[0]["id"], "github");
+        assert_eq!(
+            channels[0]["url"],
+            "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases"
+        );
+        assert_eq!(channels[1]["id"], "lanzou");
+        assert_eq!(channels[1]["url"], "https://wwaxt.lanzouu.com/ifcV14c5cnre");
+        assert_eq!(channels[1]["extractionCode"], "Niko");
+        assert_eq!(channels[2]["id"], "baidu");
+        assert_eq!(
+            channels[2]["url"],
+            "https://pan.baidu.com/s/1aTT_M2aBvope8K-fhYB0Tg?pwd=Niko"
+        );
+        assert_eq!(channels[2]["extractionCode"], "Niko");
+        for id in ["cloud", "unknown", "https://evil.test"] {
+            assert!(!config.channels().iter().any(|channel| channel.id == id));
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@ Windows 本地离线礼金管理桌面程序。它把一个家庭的多本礼金
 
 ## 使用方式
 
-1. 从 [GitHub Releases](https://github.com/Bboy-Lan/Gift-Money-Management-System/releases) 下载标准安装包 `Gift-Money-Management-System_0.4.29_x64-setup.exe`（本地名 `礼金簿_0.4.29_x64-setup.exe`，内容相同）。标准版使用系统 WebView2，缺少时需要联网安装运行时；无网络电脑选择 `Gift-Money-Management-System_0.4.29_x64-offline-setup.exe`（本地名 `礼金簿_0.4.29_x64-offline-setup.exe`），其中自带固定运行时。GitHub 附件使用 ASCII 名称，软件名称仍是“礼金簿”。
+1. 从 [GitHub Releases](https://github.com/Bboy-Lan/Gift-Money-Management-System/releases) 下载标准安装包 `Gift-Money-Management-System_0.4.30_x64-setup.exe`（本地名 `礼金簿_0.4.30_x64-setup.exe`，内容相同）。标准版使用系统 WebView2，缺少时需要联网安装运行时；无网络电脑选择 `Gift-Money-Management-System_0.4.30_x64-offline-setup.exe`（本地名 `礼金簿_0.4.30_x64-offline-setup.exe`），其中自带固定运行时。GitHub 附件使用 ASCII 名称，软件名称仍是“礼金簿”。
 2. 首次启动会强制设置 6 至 12 位数字的管理员 PIN，并显示一次性恢复码；完成后可进入工作台新建礼金库。
 3. 已有数据可在工作台中打开 `.giftvault` 礼金库；数据保存在用户选择的位置，不依赖程序目录。
 4. 进入管理员模式后可在工作台修改 PIN。删除的礼金簿和记录会进入回收站；重要操作前可使用顶部备份按钮创建副本。
@@ -52,9 +52,10 @@ PowerShell 脚本策略可能阻止 `npm.ps1`，项目统一使用 `npm.cmd`。�
 
 ## 更新渠道与维护
 
-- 关于页保留腾讯云、GitHub、网盘三类入口，网盘细分蓝奏云和百度网盘。GitHub已配置；其余暂未配置，按钮禁用。网盘是人工下载备用入口，不把分享页面当作自动更新接口。
-- `update-channels.json` 集中配置公开链接、更新清单地址和签名公钥。腾讯云上线时可使用COS托管同一版本安装包、签名和清单，无需常驻服务器；先上传安装包和签名，最后更新清单，避免客户端获取不完整发布。
-- 目前腾讯云未购买或部署。新版本仍保留独立的应用标识和本机设置目录，不自动迁移旧版PIN或设置；已有礼金库可由用户手动打开。
+- 关于页提供 GitHub、蓝奏云、百度网盘三张下载卡片；仅 GitHub 用于签名自动检查与下载安装，网盘是用户点击后在浏览器中打开的手动备用入口。
+- GitHub 无法访问时，可使用 [蓝奏云](https://wwaxt.lanzouu.com/ifcV14c5cnre) 或 [百度网盘](https://pan.baidu.com/s/1aTT_M2aBvope8K-fhYB0Tg?pwd=Niko)，两者公开提取码均为 `Niko`。先保存并退出礼金簿，再运行安装包，保留 `.giftvault` 礼金库。分享内文件版本未经本次验证，请核对版本号。
+- `update-channels.json` 集中配置公开链接、提取码、GitHub 更新清单和签名公钥。维护者需要人工更新网盘文件；发布 GitHub Release 不会自动上传网盘。分享页不是自动更新接口，不向网盘发送礼金库或账号信息。
+- 新版本仍保留独立的应用标识和本机设置目录，不自动迁移旧版PIN或设置；已有礼金库可由用户手动打开。
 - 发布前同步版本文件与 CHANGELOG；`npm.cmd run release:local` 执行完整验证一次、编译 EXE 一次，再分别打包标准版与 offline 版。两套安装包和签名在下一次打包覆盖 NSIS 输出前保留，校验签名及签名版本后写入 `release/<版本>/`；不会重复复制完整固定运行时目录。命令不运行安装器，交付完成后调用快捷方式助手。程序内更新明细在构建时从 CHANGELOG 生成。
 - 构建者需妥善离线备份 `.local-signing/lijinbook.key`，该目录禁止提交或上传。首次可运行 `node scripts/ensure-update-signing.mjs`；以后必须使用同一私钥签名。更换密钥会使已安装客户端拒绝更新。
 - GitHub 发布须附带标准版与 offline 版安装包、各自 `.sig`、`latest.json`、更新说明与两套产物的 SHA256 清单。`latest.json` 只指向标准安装包，保持 0.4.28 客户端更新协议与签名通道兼容；offline 版供手动下载备用。更新签名不是 Windows Authenticode 证书，SmartScreen 可能仍提示未知发布者。
@@ -63,7 +64,7 @@ PowerShell 脚本策略可能阻止 `npm.ps1`，项目统一使用 `npm.cmd`。�
 若构建、打包或签名校验失败，不产生版本发布目录；若仅最后一步快捷方式交付失败，命令报错并保留已验证的版本目录，输出可直接复制的助手重试命令。解决运行时或路径问题后只重跑该命令，不必重建，也不要为此删除版本目录。例如在项目根目录运行：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/create-shortcut.ps1 -Root (Get-Location).Path -Executable ((Get-Location).Path + '/release/0.4.29/礼金簿.exe')
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/create-shortcut.ps1 -Root (Get-Location).Path -Executable ((Get-Location).Path + '/release/0.4.30/礼金簿.exe')
 ```
 
 ## 关于与发布

@@ -2,11 +2,12 @@
   "productId": "com.codex.lijinbook.remediation",
   "channel": "stable",
   "publicKey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGMTE2Mjg4ODBENTIxNjMKUldSaklkV0FpR0lSSDVETFRpV1VzaHM3Tk56NGxqUHVEdXh3TVl5RnVabjA5RlBKNTB6SXNNYkEK",
-  "cloud": { "downloadUrl": null, "manifestUrl": null },
   "github": {
     "downloadUrl": "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases",
     "manifestUrl": "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases/latest/download/latest.json"
   },
-  "lanzouUrl": null,
-  "baiduUrl": null
+  "lanzouUrl": "https://wwaxt.lanzouu.com/ifcV14c5cnre",
+  "lanzouExtractionCode": "Niko",
+  "baiduUrl": "https://pan.baidu.com/s/1aTT_M2aBvope8K-fhYB0Tg?pwd=Niko",
+  "baiduExtractionCode": "Niko"
 }
