@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildStandardInstaller } from "./build-installers.mjs";
 import { assertBoundDirectory, isolatedBuildEnv, prepareRelease, releasePaths } from "./release-preparation.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -32,6 +33,16 @@ function run(command, args) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${command} failed (${result.status})`);
 }
-run(process.execPath, [join(root, "node_modules/@tauri-apps/cli/tauri.js"), "bundle", "--bundles", "nsis"]);
+function assertWindowsExecutableVersion(executable, expectedVersion) {
+  const literal = `'${executable.replace(/'/g, "''")}'`;
+  const script = `$version = (Get-Item -LiteralPath ${literal}).VersionInfo.ProductVersion; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); Write-Output $version`;
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { cwd: root, encoding: "utf8", shell: false });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`Unable to read built executable version (${result.status})`);
+  const actualVersion = result.stdout.trim();
+  if (actualVersion !== expectedVersion) throw new Error(`Built executable version ${actualVersion || "missing"} does not match ${expectedVersion}`);
+}
+const executable = await buildStandardInstaller(root, version, args => run(process.execPath, [join(root, "node_modules/@tauri-apps/cli/tauri.js"), ...args]));
+assertWindowsExecutableVersion(executable, version);
 const destination = await prepareRelease(root, version, notes, undefined, false);
 console.log("Prepared standard release: " + destination);

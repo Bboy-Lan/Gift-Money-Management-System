@@ -5,6 +5,14 @@ import { join } from "node:path";
 import { assertBoundDirectory, releasePaths } from "./release-preparation.mjs";
 import { localInstallerName } from "./update-manifest.mjs";
 
+export async function buildStandardInstaller(root, version, run) {
+  const { target } = releasePaths(root, version);
+  await assertBoundDirectory(root, target);
+  await run(["build", "--no-bundle"]);
+  await run(["bundle", "--bundles", "nsis"]);
+  return join(target, "release", "礼金簿.exe");
+}
+
 export async function buildInstallers(root, version, run) {
   const { target } = releasePaths(root, version);
   await assertBoundDirectory(root, target);

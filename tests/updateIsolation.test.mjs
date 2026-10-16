@@ -73,7 +73,7 @@ test("real update hook routes buttons and shows manual fallback after check and 
     if (command === "software_update_status") {
       if (failure === "throw") throw new Error("GitHub unavailable");
       if (failure === "status") return { ...status, error: "GitHub检查失败" };
-      return { ...status, candidate: { id: "next", version: "0.4.32", source: "github", releaseNotes: null } };
+      return { ...status, candidate: { id: "next", version: "0.4.34", source: "github", releaseNotes: null } };
     }
     if (command === "open_download_channel") { opened.push(args.channelId); return null; }
     if (command === "prepare_software_update") { prepares++; if (prepareFails) throw new Error("下载失败"); return null; }

@@ -220,6 +220,12 @@ fn file_dialog_for_app(app: &tauri::AppHandle) -> FileDialog {
         .unwrap_or_else(default_file_dialog)
 }
 
+fn spreadsheet_file_dialog(app: &tauri::AppHandle) -> FileDialog {
+    desktop_directory(app)
+        .map(|directory| FileDialog::new().set_directory(directory))
+        .unwrap_or_else(|| file_dialog_for_app(app))
+}
+
 #[tauri::command]
 fn license_text() -> String {
     include_str!("../../LICENSE").to_string()
@@ -3263,7 +3269,7 @@ fn choose_file_path(
 
 #[tauri::command]
 fn choose_spreadsheet_path(mode: String, app: tauri::AppHandle) -> Option<String> {
-    let mut dialog = file_dialog_for_app(&app)
+    let mut dialog = spreadsheet_file_dialog(&app)
         .add_filter("Excel、CSV 或其他表格", &spreadsheet_extensions())
         .add_filter("所有文件", &["*"]);
     if mode == "save" {
@@ -3280,7 +3286,7 @@ fn choose_spreadsheet_path(mode: String, app: tauri::AppHandle) -> Option<String
 
 #[tauri::command]
 fn choose_spreadsheet_paths(app: tauri::AppHandle) -> Vec<String> {
-    file_dialog_for_app(&app)
+    spreadsheet_file_dialog(&app)
         .add_filter("Excel、CSV 或其他表格", &spreadsheet_extensions())
         .add_filter("所有文件", &["*"])
         .pick_files()

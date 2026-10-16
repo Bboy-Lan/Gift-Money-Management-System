@@ -91,16 +91,22 @@ test("gift-book editing is independent from vault editing and preserves source m
   assert.match(rust, /source_imported_at: existing\.source_imported_at/);
 });
 
-test("comparison file dialog starts at Desktop while ordinary file dialogs start at This PC", async () => {
+test("spreadsheet and comparison file dialogs start at Desktop while ordinary file dialogs start at This PC", async () => {
   const rust = await readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 
   assert.match(rust, /const WINDOWS_THIS_PC_NAMESPACE: &str = "::\{20D04FE0-3AEA-1069-A2D8-08002B30309D\}"/);
   assert.match(rust, /fn default_file_dialog\(\) -> FileDialog/);
-  const ordinaryDialogCommands = ["choose_vault_path", "choose_file_path", "choose_spreadsheet_path", "choose_spreadsheet_paths"];
+  const ordinaryDialogCommands = ["choose_vault_path", "choose_file_path"];
   for (const command of ordinaryDialogCommands) {
     const start = rust.indexOf(`fn ${command}`);
     const end = rust.indexOf("#[tauri::command]", start + 1);
     assert.doesNotMatch(rust.slice(start, end), /FileDialog::new\(\)/);
+  }
+  assert.match(rust, /fn spreadsheet_file_dialog\(app: &tauri::AppHandle\) -> FileDialog[\s\S]*?desktop_directory\(app\)[\s\S]*?FileDialog::new\(\)\.set_directory\(directory\)/);
+  for (const command of ["choose_spreadsheet_path", "choose_spreadsheet_paths"]) {
+    const start = rust.indexOf(`fn ${command}`);
+    const end = rust.indexOf("#[tauri::command]", start + 1);
+    assert.match(rust.slice(start, end), /spreadsheet_file_dialog\(&app\)/);
   }
   assert.match(rust, /fn choose_comparison_vault_paths\(app: tauri::AppHandle\)[\s\S]*?desktop_directory\(&app\)[\s\S]*?FileDialog::new\(\)\.set_directory\(directory\)/);
 });

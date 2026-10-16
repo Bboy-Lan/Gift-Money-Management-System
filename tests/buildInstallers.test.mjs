@@ -27,3 +27,10 @@ test("two bundle modes preserve distinct installer signatures before NSIS overwr
     assert.ok(!(await readdir(join(root, "src-tauri/target"))).some(name => name.startsWith("installers-")));
   } finally { await rm(root, {recursive:true,force:true}); }
 });
+
+test("standard release rebuilds and verifies the versioned executable before bundling", async () => {
+  const source = await readFile(new URL("../scripts/release-standard.mjs", import.meta.url), "utf8");
+
+  assert.match(source, /buildStandardInstaller/);
+  assert.match(source, /assertWindowsExecutableVersion/);
+});

@@ -1,7 +1,7 @@
 {
   "name": "lijin-book",
   "private": true,
-  "version": "0.4.32",
+  "version": "0.4.33",
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
