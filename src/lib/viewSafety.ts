@@ -6,8 +6,8 @@ export function readState(query: { isPending: boolean; isError: boolean; data?: 
   return Array.isArray(query.data) && query.data.length === 0 ? "empty" : "ready";
 }
 
-export function allowFormClose(dirty: boolean, saving: boolean, confirmDiscard: () => boolean) {
-  return !saving && (!dirty || confirmDiscard());
+export function allowFormClose(_dirty: boolean, saving: boolean) {
+  return !saving;
 }
 
 export function validateChangedText(label: string, value: string, limit: number, original?: string | null) {

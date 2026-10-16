@@ -705,6 +705,13 @@ pub fn acknowledge_software_update() -> Result<Option<String>, String> {
     Ok(Some(message))
 }
 
+#[cfg(windows)]
+fn download_channel_command(url: &str) -> std::process::Command {
+    let mut command = super::hidden_windows_command("rundll32.exe");
+    command.arg("url.dll,FileProtocolHandler").arg(url);
+    command
+}
+
 #[tauri::command]
 pub fn open_download_channel(channel_id: String) -> Result<(), String> {
     let config = ChannelConfig::load()?;
@@ -717,8 +724,7 @@ pub fn open_download_channel(channel_id: String) -> Result<(), String> {
     validate_https(&url)?;
     #[cfg(windows)]
     {
-        super::hidden_windows_command("explorer.exe")
-            .arg(url)
+        download_channel_command(&url)
             .spawn()
             .map_err(|e| format!("无法打开下载页面：{e}"))?;
         Ok(())
@@ -748,17 +754,35 @@ mod tests {
         assert!(super::validate_https("https://downloads.example.test/app.exe").is_ok());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn download_channels_use_the_default_browser_protocol_handler() {
+        use std::ffi::OsStr;
+
+        let command = super::download_channel_command("https://pan.baidu.com/s/example");
+        assert_eq!(command.get_program(), OsStr::new("rundll32.exe"));
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            [
+                OsStr::new("url.dll,FileProtocolHandler"),
+                OsStr::new("https://pan.baidu.com/s/example")
+            ]
+        );
+    }
+
     #[test]
     fn manifests_require_variant_identity_stable_and_newer_three_part_version() {
         let valid = json!({"productId":"com.codex.lijinbook.remediation", "channel":"stable"});
-        assert!(super::validate_manifest(&valid, "0.4.31").is_ok());
+        assert!(super::validate_manifest(&valid, "0.4.33").is_ok());
         for version in [
             "0.4.27",
             "0.4.28",
             "0.4.29",
             "0.4.30",
+            "0.4.31",
+            "0.4.32",
             "0.4",
-            "0.4.31-beta.1",
+            "0.4.32-beta.1",
         ] {
             assert!(
                 super::validate_manifest(&valid, version).is_err(),

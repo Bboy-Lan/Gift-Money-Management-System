@@ -24,18 +24,21 @@ const channels = [
   { id: "lanzou", label: "蓝奏云", url: "https://wwaxt.lanzouu.com/ifcV14c5cnre", extractionCode: "Niko" },
   { id: "baidu", label: "百度网盘", url: "https://pan.baidu.com/s/1aTT_M2aBvope8K-fhYB0Tg?pwd=Niko", extractionCode: "Niko" },
 ];
-test("three download cards show manual instructions and public extraction codes", () => {
+test("three download card titles open the configured share pages and show public extraction codes", () => {
   const html = renderToStaticMarkup(React.createElement(AboutSettings, { ...props, updateStatus: { configured: false, installed: true, candidate: null, channels } }));
   for (const label of ["GitHub", "蓝奏云", "百度网盘", "提取码", "Niko"]) assert.ok(html.includes(label), label);
   const downloadHtml = html.slice(html.indexOf('class="download-channel-grid"'), html.indexOf('class="release-notes-details"'));
   assert.doesNotMatch(downloadHtml, /腾讯云|同一个版本/);
   assert.match(html, /先保存.*退出/);
-  assert.match(html, /标准包.*离线包/);
+  assert.doesNotMatch(downloadHtml, /标准包.*离线包/);
   assert.doesNotMatch(html, /href="(?:#|javascript:)/);
   assert.match(html, /尚未配置/);
+  const configuredDom = new JSDOM(html);
+  assert.equal(configuredDom.window.document.querySelectorAll('.download-channel-title').length, 3);
+  configuredDom.window.close();
   const missing = renderToStaticMarkup(React.createElement(AboutSettings, { ...props, updateStatus: { configured: false, installed: true, candidate: null, channels: channels.map(channel => ({ ...channel, url: null })) } }));
   const missingDom = new JSDOM(missing);
-  assert.ok([...missingDom.window.document.querySelectorAll('.download-channel-button')].every(button => button.disabled));
+  assert.ok([...missingDom.window.document.querySelectorAll('.download-channel-title')].every(button => button.disabled));
   missingDom.window.close();
 });
 
@@ -70,7 +73,7 @@ test("real update hook routes buttons and shows manual fallback after check and 
     if (command === "software_update_status") {
       if (failure === "throw") throw new Error("GitHub unavailable");
       if (failure === "status") return { ...status, error: "GitHub检查失败" };
-      return { ...status, candidate: { id: "next", version: "0.4.31", source: "github", releaseNotes: null } };
+      return { ...status, candidate: { id: "next", version: "0.4.32", source: "github", releaseNotes: null } };
     }
     if (command === "open_download_channel") { opened.push(args.channelId); return null; }
     if (command === "prepare_software_update") { prepares++; if (prepareFails) throw new Error("下载失败"); return null; }
@@ -84,7 +87,7 @@ test("real update hook routes buttons and shows manual fallback after check and 
   const root = createRoot(dom.window.document.getElementById("root"));
   try {
     await act(async () => root.render(React.createElement(Harness)));
-    const buttons = dom.window.document.querySelectorAll('.download-channel-button');
+    const buttons = dom.window.document.querySelectorAll('.download-channel-title');
     assert.equal(buttons.length, 3);
     for (const button of buttons) { assert.equal(button.disabled, false); await act(async () => button.click()); }
     assert.deepEqual(opened, ["github", "lanzou", "baidu"]);

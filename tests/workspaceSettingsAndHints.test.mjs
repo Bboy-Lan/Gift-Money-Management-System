@@ -115,11 +115,13 @@ test("arrow keys scroll the active page without hijacking form controls", async 
   assert.match(source, /behavior: "auto"/);
 });
 
-test("first-time admin setup keeps the empty workspace and explains the next action", async () => {
+test("first-time users can start creating a vault without finding the settings unlock action", async () => {
   const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
-  assert.match(source, /管理员模式已进入工作台，请先新建礼金库或打开已有礼金库/);
+  assert.match(source, /首次使用：新建礼金库/);
+  assert.match(source, /解锁管理并新建礼金库/);
+  assert.match(source, /onUnlock=\{\(\) => \{ setEnterWorkspaceAfterAdmin\(false\); setPendingWorkspaceVault\(null\); setAdminPrompt\(session.securityConfigured \? "unlock" : "setup"\); \}\}/);
   assert.match(source, /尚未打开礼金库/);
-  assert.match(source, /新建礼金库/);
+  assert.match(source, /设置管理员 PIN 后即可创建礼金库并开始登记/);
 });
 
 test("settings includes a donation page with bundled QR images", async () => {

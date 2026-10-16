@@ -1,7 +1,7 @@
 {
   "name": "lijin-book",
   "private": true,
-  "version": "0.4.30",
+  "version": "0.4.32",
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
@@ -12,7 +12,8 @@
     "test:recent-vaults": "node --test tests/recentVaults.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
-    "release:local": "node scripts/release-local.mjs"
+    "release:local": "node scripts/release-local.mjs",
+    "release:standard": "node scripts/release-standard.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.0",

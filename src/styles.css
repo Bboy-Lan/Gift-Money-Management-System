@@ -15,6 +15,7 @@ h1, h2, h3, p { margin-top: 0; }
 h1 { margin: 3px 0 0; font-size: 25px; letter-spacing: .04em; }
 .welcome-copy { color: #536272; font-size: 15px; line-height: 1.8; margin-bottom: 28px; }
 .welcome-actions { align-items: stretch; flex-direction: column; gap: 10px; }
+  .welcome-first-use-hint { margin: 2px 0 0; color: #6e8188; font-size: 11px; line-height: 1.45; text-align: center; }
 .recent-vaults { display: grid; gap: 5px; margin-top: 22px; padding-top: 15px; border-top: 1px solid #edf0f2; }
 .recent-heading { display: flex; align-items: baseline; justify-content: space-between; padding: 0 2px 4px; color: #536575; font-size: 12px; font-weight: 700; }
 .recent-heading small { color: #9aa6b0; font-size: 10px; font-weight: 400; }
@@ -94,10 +95,11 @@ h1 { margin: 3px 0 0; font-size: 25px; letter-spacing: .04em; }
 .download-channel-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .download-channel-card { display: flex; flex-direction: column; align-items: flex-start; gap: 9px; min-width: 0; padding: 16px; border: 1px solid #dce6e2; background: #fbfdfc; border-radius: 5px; }
 .download-channel-card > svg { color: #468578; }
-.download-channel-card strong { color: #354856; font-size: 14px; }
+  .download-channel-title { display: inline-flex; align-items: center; gap: 5px; padding: 0; color: #354856; border: 0; background: transparent; font-size: 14px; font-weight: 700; }
+  .download-channel-title:hover:not(:disabled) { color: #16746e; text-decoration: underline; text-underline-offset: 3px; }
+  .download-channel-title:disabled { color: #7d8c92; }
 .download-channel-card p { flex: 1; margin: 0 0 5px; color: #74858a; font-size: 12px; line-height: 1.65; }
-.download-channel-button { gap: 7px; max-width: 100%; }
-.download-channel-button:focus-visible, .about-updates button:focus-visible { outline: 2px solid #16746e; outline-offset: 3px; }
+  .download-channel-title:focus-visible, .about-updates button:focus-visible { outline: 2px solid #16746e; outline-offset: 3px; }
 .netdisk-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
 .about-project-info { display: flex !important; flex-wrap: wrap; align-items: center; gap: 18px; color: #74858a; font-size: 12px; }
 .about-project-info .license-preview { flex-basis: 100%; }

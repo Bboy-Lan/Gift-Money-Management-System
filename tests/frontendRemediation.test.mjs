@@ -85,17 +85,12 @@ test('read errors distinguish unavailable data from cached stale data and succes
   assert.equal(mod.readState({ isPending: false, isError: false, data: [{ id: 1 }] }), 'ready');
 });
 
-test('dirty cancel requires discard confirmation and saving forbids every close route', async () => {
+test('closing a dirty form never opens a browser confirmation while saving still forbids closing', async () => {
   const mod = await load('../src/lib/viewSafety.ts');
   assert.equal(typeof mod.allowFormClose, 'function');
-  let confirms = 0;
-  const reject = () => { confirms++; return false; };
-  assert.equal(mod.allowFormClose(true, true, reject), false);
-  assert.equal(confirms, 0);
-  assert.equal(mod.allowFormClose(true, false, reject), false);
-  assert.equal(confirms, 1);
-  assert.equal(mod.allowFormClose(true, false, () => true), true);
-  assert.equal(mod.allowFormClose(false, false, reject), true);
+  assert.equal(mod.allowFormClose(true, true), false);
+  assert.equal(mod.allowFormClose(true, false), true);
+  assert.equal(mod.allowFormClose(false, false), true);
 });
 
 test('unchanged legacy dates and long notes survive another field edit while changed invalid values fail', async () => {

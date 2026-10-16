@@ -13,7 +13,8 @@ const { version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"
 const directory = join(root, "release", version);
 const installer = `礼金簿_${version}_x64-setup.exe`;
 const offlineInstaller = localInstallerName(version, true);
-const filenames = [installer, installer + ".sig", offlineInstaller, offlineInstaller + ".sig", "latest.json", "RELEASE_NOTES.md", "SHA256SUMS.txt", "README.md"];
+const standardOnly = process.argv.includes("--standard-only");
+const filenames = [installer, installer + ".sig", ...(standardOnly ? [] : [offlineInstaller, offlineInstaller + ".sig"]), "latest.json", "RELEASE_NOTES.md", "SHA256SUMS.txt", "README.md"];
 const assets = [];
 for (const name of filenames) {
   const path = join(directory, name);
@@ -28,7 +29,7 @@ if (manifest.version !== version || manifest.productId !== "com.codex.lijinbook.
 const platform = manifest.platforms["lijinbook-remediation-windows-x86_64"];
 const channels = JSON.parse(await readFile(join(root, "update-channels.json"), "utf8"));
 verifyUpdateSignature(await readFile(join(directory, installer)), platform.signature, channels.publicKey, version);
-verifyUpdateSignature(await readFile(join(directory, offlineInstaller)), (await readFile(join(directory, offlineInstaller + ".sig"), "utf8")).trim(), channels.publicKey, version);
+if (!standardOnly) verifyUpdateSignature(await readFile(join(directory, offlineInstaller)), (await readFile(join(directory, offlineInstaller + ".sig"), "utf8")).trim(), channels.publicKey, version);
 if (platform.signature !== (await readFile(join(directory, installer + ".sig"), "utf8")).trim()
   || platform.url !== `https://github.com/${repository}/releases/download/v${version}/${releaseInstallerName(version)}`) throw new Error("Manifest asset mismatch");
 function git(args, input) {

@@ -752,7 +752,7 @@ function App() {
 
   if (!vault) {
     return <SoftwareUpdateContext.Provider value={updates}><>
-      <WorkspaceStart session={session} pendingSpreadsheetPaths={pendingSpreadsheetPaths} onClose={returnToStartPage} onOpenVault={openVault} onBeginCreate={() => setCreateVaultOpen(true)} onChooseImport={() => void chooseSpreadsheetPathsForWorkspace()} onChangePin={() => setPinChangeOpen(true)} />
+      <WorkspaceStart session={session} pendingSpreadsheetPaths={pendingSpreadsheetPaths} onClose={returnToStartPage} onOpenVault={openVault} onBeginCreate={() => setCreateVaultOpen(true)} onChooseImport={() => void chooseSpreadsheetPathsForWorkspace()} onUnlock={() => { setEnterWorkspaceAfterAdmin(false); setPendingWorkspaceVault(null); setAdminPrompt(session.securityConfigured ? "unlock" : "setup"); }} onChangePin={() => setPinChangeOpen(true)} />
       {createVaultOpen && <CreateVaultModal error={createVaultError} isSaving={createVaultSaving} vaultName={vaultName} vaultNotes={vaultNotes} onNameChange={setVaultName} onNotesChange={setVaultNotes} onClose={() => setCreateVaultOpen(false)} onCreate={createVault} />}
       {overlays}
     </></SoftwareUpdateContext.Provider>;
@@ -816,6 +816,7 @@ function WelcomeScreen(props: { recentVaults: RecentVault[]; session: SessionSta
   useEffect(() => {
     recentListRef.current?.scrollTo(0, 0);
   }, [props.recentVaults.length]);
+  const hasRecentVaults = props.recentVaults.length > 0;
   return (
     <main className="welcome-shell">
       <section className={`welcome-panel ${props.noticeVisible ? "notice-visible" : ""}`} onMouseDown={startWelcomeDrag}>
@@ -827,8 +828,7 @@ function WelcomeScreen(props: { recentVaults: RecentVault[]; session: SessionSta
         </div>
         <p className="welcome-copy">记录、查询和比较每一笔礼金往来。</p>
         <div className="welcome-actions">
-          <button className="primary-button" onClick={() => props.onUserMode()}><BookOpen size={17} />用户模式</button>
-          <button className="secondary-button" onClick={() => props.onAdminMode()}><ShieldCheck size={17} />管理员模式</button>
+          {hasRecentVaults ? <><button className="primary-button" onClick={() => props.onUserMode()}><BookOpen size={17} />用户模式</button><button className="secondary-button" onClick={() => props.onAdminMode()}><ShieldCheck size={17} />管理员模式</button></> : <><button className="primary-button" onClick={() => props.onAdminMode()}><CirclePlus size={17} />首次使用：新建礼金库</button><p className="welcome-first-use-hint">设置管理员 PIN 后即可创建礼金库并开始登记。</p></>}
         </div>
         <section className="recent-vaults welcome-recent"><div className="recent-heading"><span>最近使用</span></div><div className="recent-vault-list" ref={recentListRef}>{props.recentVaults.length > 0 ? props.recentVaults.map((recent) => <article className="recent-vault-item" key={recentVaultIdentity(recent)}><button className="recent-vault-button" type="button" title={`以用户模式打开「${recent.name}」`} onClick={() => props.onUserMode(recent)}><FolderOpen size={17} /><span><strong>{recent.name}</strong><small title={recent.path}>{recent.path}</small></span></button><button className={`icon-button subtle recent-vault-action recent-vault-admin ${props.session.role === "admin" ? "active" : ""}`} type="button" title={`以管理员模式打开「${recent.name}」`} aria-label={`以管理员模式打开「${recent.name}」`} onClick={() => props.onAdminMode(recent)}><ShieldCheck size={16} /></button><button className="icon-button subtle recent-vault-action recent-vault-remove" type="button" title={`从启动页移除「${recent.name}」；不会删除礼金库或礼金数据`} aria-label={`从启动页移除「${recent.name}」；不会删除礼金库或礼金数据`} onClick={() => props.onRemoveRecent(recent)}><X size={16} /></button></article>) : <div className="recent-empty">暂无使用记录</div>}</div></section>
         <button className="text-button welcome-update" disabled={props.localUpdatePhase !== "idle"} onClick={() => props.onCheckLocalUpdate()}><RefreshCw className={props.localUpdatePhase !== "idle" ? "is-spinning" : undefined} size={15} />{props.localUpdatePhase === "checking" ? "正在检测有无可用更新…" : props.localUpdatePhase === "installing" ? "正在安装新版本…" : "检查更新"}</button>
@@ -838,9 +838,9 @@ function WelcomeScreen(props: { recentVaults: RecentVault[]; session: SessionSta
   );
 }
 
-function WorkspaceStart({ session, pendingSpreadsheetPaths, onClose, onOpenVault, onBeginCreate, onChooseImport, onChangePin }: { session: SessionStatus; pendingSpreadsheetPaths: string[]; onClose: () => void; onOpenVault: () => void; onBeginCreate: () => void; onChooseImport: () => void; onChangePin: () => void }) {
+function WorkspaceStart({ session, pendingSpreadsheetPaths, onClose, onOpenVault, onBeginCreate, onChooseImport, onUnlock, onChangePin }: { session: SessionStatus; pendingSpreadsheetPaths: string[]; onClose: () => void; onOpenVault: () => void; onBeginCreate: () => void; onChooseImport: () => void; onUnlock: () => void; onChangePin: () => void }) {
   const isAdmin = session.role === "admin";
-  return <div className="app-shell workspace-start"><header className="topbar"><div className="topbar-brand"><div className="brand-mark small"><BookOpen size={17} /></div><strong>礼金簿管理</strong><span className="slash">/</span><span className="vault-label">未打开礼金库</span></div><div className="topbar-actions"><span className={`role-badge ${isAdmin ? "admin" : "viewer"}`}>{isAdmin ? "管理员模式" : "用户模式"}</span>{isAdmin && <button className="secondary-button compact" title="修改管理员 PIN" onClick={onChangePin}><KeyRound size={14} />修改 PIN</button>}<button className="secondary-button compact return-start-button" title="返回启动页" onClick={onClose}><ArrowLeft size={15} />返回启动页</button></div></header><div className="workspace"><aside className="sidebar"><div className="sidebar-heading"><span>礼金簿管理</span></div>{isAdmin && <button className="sidebar-create" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button>}<button className="sidebar-create sidebar-open" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin && <button className="sidebar-create sidebar-import" onClick={onChooseImport}><FileSpreadsheet size={15} />导入表格</button>}<div className="sidebar-bottom"><VersionBadge /></div></aside><main className="content-area"><section className="workspace-empty"><BookOpen size={30} /><h2>尚未打开礼金库</h2><div className="workspace-empty-actions"><button className="primary-button" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin && <button className="secondary-button" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button>}</div>{isAdmin && pendingSpreadsheetPaths.length > 0 && <span className="field-hint">已暂存 {pendingSpreadsheetPaths.length} 个表格文件。</span>}</section></main></div></div>;
+  return <div className="app-shell workspace-start"><header className="topbar"><div className="topbar-brand"><div className="brand-mark small"><BookOpen size={17} /></div><strong>礼金簿管理</strong><span className="slash">/</span><span className="vault-label">未打开礼金库</span></div><div className="topbar-actions"><span className={`role-badge ${isAdmin ? "admin" : "viewer"}`}>{isAdmin ? "管理员模式" : "用户模式"}</span>{isAdmin && <button className="secondary-button compact" title="修改管理员 PIN" onClick={onChangePin}><KeyRound size={14} />修改 PIN</button>}<button className="secondary-button compact return-start-button" title="返回启动页" onClick={onClose}><ArrowLeft size={15} />返回启动页</button></div></header><div className="workspace"><aside className="sidebar"><div className="sidebar-heading"><span>礼金簿管理</span></div>{isAdmin ? <button className="sidebar-create" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button> : <button className="sidebar-create" onClick={onUnlock}><Unlock size={16} />解锁管理并新建礼金库</button>}<button className="sidebar-create sidebar-open" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin && <button className="sidebar-create sidebar-import" onClick={onChooseImport}><FileSpreadsheet size={15} />导入表格</button>}<div className="sidebar-bottom"><VersionBadge /></div></aside><main className="content-area"><section className="workspace-empty"><BookOpen size={30} /><h2>尚未打开礼金库</h2><div className="workspace-empty-actions"><button className="primary-button" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin ? <button className="secondary-button" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button> : <button className="secondary-button" onClick={onUnlock}><Unlock size={16} />解锁管理并新建礼金库</button>}</div>{isAdmin && pendingSpreadsheetPaths.length > 0 && <span className="field-hint">已暂存 {pendingSpreadsheetPaths.length} 个表格文件。</span>}</section></main></div></div>;
 }
 
 function CreateVaultModal({ error, isSaving, vaultName, vaultNotes, onNameChange, onNotesChange, onClose, onCreate }: { error: unknown; isSaving: boolean; vaultName: string; vaultNotes: string; onNameChange: (value: string) => void; onNotesChange: (value: string) => void; onClose: () => void; onCreate: () => void }) {
@@ -1979,24 +1979,40 @@ function EntryModal({ onClose, onSubmit, isSaving, tagsReady, error, tagsError, 
     event.preventDefault();
     focus(ref);
   };
-  const submit = () => { if (valid && amountFen !== null && !isSaving && (!returnGiftAmount.trim() || (returnGiftAmountFen !== null && returnGiftAmountFen > 0))) onSubmit({ personName: personName === initial?.personName ? personName : personName.trim(), address: address === initial?.address ? address : address.trim(), amountFen, paymentMethod, receivedAt: initial?.receivedAt ?? nowLocalDateTime(), note, returnGift: initial ? returnGift : "", returnGiftAmountFen, tagIds: selectedTagIds }); };
-  const addTag = async () => {
+  const tagSavingRef = useRef(false);
+  const submit = async () => {
+    if (!valid || amountFen === null || isSaving || (returnGiftAmount.trim() && (returnGiftAmountFen === null || returnGiftAmountFen <= 0))) return;
+    let tagIds = selectedTagIds;
+    const typedTag = newTag.trim();
+    if (typedTag) {
+      const existingTag = availableTags.find((tag) => tag.name.trim() === typedTag);
+      if (existingTag) tagIds = tagIds.includes(existingTag.id) ? tagIds : [...tagIds, existingTag.id];
+      else {
+        const tag = await addTag();
+        if (!tag) return;
+        tagIds = tagIds.includes(tag.id) ? tagIds : [...tagIds, tag.id];
+      }
+    }
+    onSubmit({ personName: personName === initial?.personName ? personName : personName.trim(), address: address === initial?.address ? address : address.trim(), amountFen, paymentMethod, receivedAt: initial?.receivedAt ?? nowLocalDateTime(), note, returnGift: initial ? returnGift : "", returnGiftAmountFen, tagIds });
+  };
+  const addTag = async (): Promise<Tag | null> => {
     const name = newTag.trim();
-    if (!name || tagSaving) return false;
+    if (!name || tagSaving || tagSavingRef.current) return null;
+    tagSavingRef.current = true;
     setTagSaving(true); setTagError(null);
     try {
       const tag = await onCreateTag(name, newTagColor);
-      if (!api.isCurrent()) return true;
+      if (!api.isCurrent()) return null;
       setNewTag("");
       const nextTags = mergeEntryTag(availableTags, tag);
       setCreatedTags((current) => mergeEntryTag(current, tag));
       setNewTagColor(nextTagColor(nextTags));
       setPromotedTagId(tag.id);
       setSelectedTagIds((current) => current.includes(tag.id) ? current : [...current, tag.id]);
-      return true;
+      return tag;
     } catch (error) {
-      setTagError(String(error)); return false;
-    } finally { setTagSaving(false); }
+      setTagError(String(error)); return null;
+    } finally { tagSavingRef.current = false; setTagSaving(false); }
   };
   const handleTagEnter = async (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key !== "Enter" || event.shiftKey) return;
@@ -2022,7 +2038,7 @@ function EntryModal({ onClose, onSubmit, isSaving, tagsReady, error, tagsError, 
       window.removeEventListener("keydown", closeOverflowOnEscape);
     };
   }, [tagsExpanded]);
-  return <Modal title={title} className="entry-modal" onClose={onClose} isSaving={isSaving || tagSaving}><form className="entry-form" onSubmit={(event) => { event.preventDefault(); submit(); }}>
+  return <Modal title={title} className="entry-modal" onClose={onClose} isSaving={isSaving || tagSaving}><form className="entry-form" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
     {(validationError || error || tagError || !tagsReady) && <p className="form-error" role="alert">{validationError || String(error || tagError || "人物标签尚未成功读取，请关闭后重试")}</p>}
     {!tagsReady && <p className="form-error" role="alert">{tagsError ? String(tagsError) : "人物标签正在读取…"}{onRetryTags && <button className="secondary-button compact" type="button" onClick={onRetryTags}>重新读取人物标签</button>}</p>}
     {amount.trim() && amountFen === null && <p className="form-error" role="alert">礼金金额须为 0.01–9,999,999,999.99 元，最多两位小数。</p>}
@@ -2030,7 +2046,7 @@ function EntryModal({ onClose, onSubmit, isSaving, tagsReady, error, tagsError, 
     <div className="form-grid"><label><span className="field-label-row"><span>姓名</span>{duplicateName && <small className="duplicate-name-warning">姓名重复</small>}</span><div className="entry-name-field"><input ref={nameRef} autoFocus value={personName} onChange={(event) => setPersonName(event.target.value)} onKeyDown={(event) => moveTo(event, amountRef)} placeholder="必填" /></div></label><label>金额（元）<input ref={amountRef} inputMode="decimal" value={amount} onChange={(event) => setAmount(event.target.value)} onKeyDown={(event) => moveTo(event, addressRef)} placeholder="例如 500" /></label></div>
     <div className="form-grid"><label>地址<input ref={addressRef} value={address} onChange={(event) => setAddress(event.target.value)} onKeyDown={(event) => moveTo(event, paymentRef)} placeholder="可选" /></label><label>支付方式<select ref={paymentRef} value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)} onKeyDown={(event) => moveTo(event, initial ? returnGiftAmountRef : saveRef)}>{legacyPaymentMethod && <option value={legacyPaymentMethod} hidden>{legacyPaymentMethod}（历史记录）</option>}{PAYMENT_METHOD_OPTIONS.map((method) => <option value={method} key={method}>{method}</option>)}</select></label></div>
     <p className="field-hint">人物标签在该人物所属的各本礼金簿中共享。</p>
-    <div className="entry-tags"><div className="entry-tags-heading"><span className="field-label">人物标签</span>{availableTags.length > 0 && <div className="entry-tag-picker"><div className="tag-cloud entry-tag-cloud">{tagSections.visible.map(tagButton)}{tagSections.overflow.length > 0 && <button type="button" className="tag-more-button" aria-expanded={tagsExpanded} onClick={() => setTagsExpanded((expanded) => !expanded)}>{tagsExpanded ? "收起标签" : "更多标签"}</button>}</div>{tagsExpanded && tagSections.overflow.length > 0 && <div className="tag-overflow-popover"><div className="tag-cloud">{tagSections.overflow.map(tagButton)}</div></div>}</div>}</div><div className="entry-tag-create"><input tabIndex={-1} className="tag-color-picker" type="color" value={newTagColor} title="选择新建标签的颜色" aria-label="选择新建标签的颜色" onChange={(event) => setNewTagColor(event.target.value)} /><input ref={tagInputRef} value={newTag} placeholder="例如：同学" onChange={(event) => setNewTag(event.target.value)} onKeyDown={handleTagEnter} /></div></div>
+    <div className="entry-tags"><div className="entry-tags-heading"><span className="field-label">人物标签</span>{availableTags.length > 0 && <div className="entry-tag-picker"><div className="tag-cloud entry-tag-cloud">{tagSections.visible.map(tagButton)}{tagSections.overflow.length > 0 && <button type="button" className="tag-more-button" aria-expanded={tagsExpanded} onClick={() => setTagsExpanded((expanded) => !expanded)}>{tagsExpanded ? "收起标签" : "更多标签"}</button>}</div>{tagsExpanded && tagSections.overflow.length > 0 && <div className="tag-overflow-popover"><div className="tag-cloud">{tagSections.overflow.map(tagButton)}</div></div>}</div>}</div><div className="entry-tag-create"><input tabIndex={-1} className="tag-color-picker" type="color" value={newTagColor} title="选择新建标签的颜色" aria-label="选择新建标签的颜色" onChange={(event) => setNewTagColor(event.target.value)} /><input ref={tagInputRef} value={newTag} placeholder="例如：同学" onChange={(event) => setNewTag(event.target.value)} onKeyDown={handleTagEnter} /><button type="button" className="secondary-button compact" title="新建标签" aria-label="新建标签" disabled={!newTag.trim() || tagSaving} onClick={() => void addTag()}><CirclePlus size={14} /></button></div></div>
     {initial && <div className="form-grid"><label>回礼金额（元）<input ref={returnGiftAmountRef} inputMode="decimal" value={returnGiftAmount} onChange={(event) => setReturnGiftAmount(event.target.value)} onKeyDown={(event) => moveTo(event, saveRef)} placeholder="可选" /></label><label>回礼备注<input value={returnGift} onChange={(event) => setReturnGift(event.target.value)} placeholder="可选" /></label></div>}
     <label className="wide-field">备注<textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="包括不限于随礼、礼品或其他注意事项等" /></label>
     <div className="modal-actions"><button type="button" className="secondary-button" onClick={onClose}>取消</button><button ref={saveRef} type="submit" className="primary-button" disabled={!valid || isSaving}>{isSaving ? "保存中…" : title === "编辑信息" ? "保存修改" : "保存记录"}</button></div>
@@ -2107,12 +2123,12 @@ function ConfirmTrashEmpty({ error, scopeDescription, isClearing, onClose, onCon
 function canLeaveWorkspace(completedForm: HTMLElement | null = null) {
   const modals = Array.from(document.querySelectorAll<HTMLElement>('[data-modal-saving="true"], [data-modal-dirty="true"]')).filter((modal) => modal !== completedForm);
   if (modals.some((modal) => modal.dataset.modalSaving === "true")) return false;
-  return !modals.some((modal) => modal.dataset.modalDirty === "true") || window.confirm("尚有未保存内容，是否放弃修改？");
+  return !modals.some((modal) => modal.dataset.modalDirty === "true");
 }
 
 function Modal({ title, onClose, children, className = "", isSaving = false, error, owner }: { title: string; onClose: () => void; children: React.ReactNode; className?: string; isSaving?: boolean; error?: unknown; owner?: string }) {
   const [dirty, setDirty] = useState(false);
-  const requestClose = () => { if (allowFormClose(dirty, isSaving, () => window.confirm("尚有未保存内容，是否放弃修改？"))) onClose(); };
+  const requestClose = () => { if (allowFormClose(dirty, isSaving)) onClose(); };
   useEffect(() => {
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); requestClose(); } };
     window.addEventListener("keydown", escape);
@@ -2121,7 +2137,7 @@ function Modal({ title, onClose, children, className = "", isSaving = false, err
   return <div className="modal-backdrop" data-modal-dirty={dirty} data-modal-saving={isSaving} data-modal-owner={owner} onChangeCapture={() => setDirty(true)} onClickCapture={(event) => {
     const button = (event.target as HTMLElement).closest("button");
     if (button?.hasAttribute("aria-pressed")) setDirty(true);
-    if (button?.textContent?.trim() === "取消" && !allowFormClose(dirty, isSaving, () => window.confirm("尚有未保存内容，是否放弃修改？"))) { event.preventDefault(); event.stopPropagation(); }
+    if (button?.textContent?.trim() === "取消" && isSaving) { event.preventDefault(); event.stopPropagation(); }
   }} onMouseDown={(event) => { if (event.target === event.currentTarget) requestClose(); }}><div className={`modal ${className}`} role="dialog" aria-modal="true" aria-label={title}><div className="modal-heading"><h3>{title}</h3><button className="icon-button" title="关闭" disabled={isSaving} onClick={requestClose}><X size={17} /></button></div>{isSaving && <p className="field-hint" role="status">操作进行中，请稍候…</p>}{Boolean(error) && <p className="form-error" role="alert">{String(error).replace(/^Error:\s*/, "")}</p>}{children}</div></div>;
 }
 

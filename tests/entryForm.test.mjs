@@ -36,6 +36,23 @@ test("new entry tag is visible first without changing the global order", async (
   assert.deepEqual(tags.map((tag) => tag.id), ["a", "b", "c", "d", "e"]);
 });
 
+test("new entry tag uses an icon-only click action and is selected immediately after creation", async () => {
+  const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+  assert.doesNotMatch(source, />新建标签<\/button>/);
+  assert.match(source, /onClick=\{\(\) => void addTag\(\)\}\><CirclePlus size=\{14\} \/><\/button>/);
+  assert.match(source, /setCreatedTags\(\(current\) => mergeEntryTag\(current, tag\)\)/);
+  assert.match(source, /setSelectedTagIds\(\(current\) => current\.includes\(tag\.id\) \? current : \[\.\.\.current, tag\.id\]\)/);
+});
+
+test("saving an entry creates and attaches the typed tag without requiring the plus button", async () => {
+  const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /const submit = async \(\)/);
+  assert.match(source, /const tag = await addTag\(\)/);
+  assert.match(source, /tagIds \}\);/);
+});
+
 test("editing an entry moves from payment to return amount and then submits from save", async () => {
   const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
 

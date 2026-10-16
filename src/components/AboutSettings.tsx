@@ -25,9 +25,9 @@ export function AboutSettings(props: Props) {
   const percent = downloadPercent(progress);
   const channels = props.updateStatus?.channels ?? [];
   const open = (id: string) => void controller?.openChannel(id);
-  const channelButton = (id: DownloadChannel["id"], label: string) => {
+  const channelTitle = (id: DownloadChannel["id"], label: string) => {
     const channel = channels.find(item => item.id === id);
-    return <button className="secondary-button compact download-channel-button" type="button" disabled={!channel?.url} aria-label={label} title={channel?.url ?? "暂未配置下载链接"} onClick={() => open(id)}>{label}<ExternalLink size={13} /></button>;
+    return <button className="download-channel-title" type="button" disabled={!channel?.url} aria-label={`${label} 下载`} title={channel?.url ?? "暂未配置下载链接"} onClick={() => open(id)}>{label}<ExternalLink size={13} /></button>;
   };
   const action = props.updatePhase === "downloading" ? "正在下载…" : props.updatePhase === "verifying" ? "正在校验…" : props.updatePhase === "installing" ? "正在安装…" : props.updatePhase === "ready" ? "重启并安装" : "立即更新";
 
@@ -43,9 +43,9 @@ export function AboutSettings(props: Props) {
     </section>
 
     <section className="about-card"><div className="about-section-title"><h4>下载方式</h4><span>GitHub 无法访问时，可使用网盘手动下载</span></div><div className="download-channel-grid">
-      <article className="download-channel-card"><Github size={21} /><strong>GitHub</strong><p>查看正式发布、版本说明与安装包</p>{channelButton("github", "GitHub 下载")}</article>
-      {(["lanzou", "baidu"] as const).map(id => <article className="download-channel-card" key={id}><HardDriveDownload size={21} /><strong>{id === "lanzou" ? "蓝奏云" : "百度网盘"}</strong><p>浏览器打开分享页，手动下载安装包</p><p>提取码：{channels.find(item => item.id === id)?.extractionCode ?? "未提供"}</p>{channelButton(id, id === "lanzou" ? "蓝奏云" : "百度网盘")}</article>)}
-    </div><p className="about-meta">手动安装前，请先保存并退出礼金簿，再运行安装包，保留已有礼金库。网盘文件由人工维护，请核对版本号。</p><p className="about-meta">标准包优先使用系统 WebView2，缺少时需联网补齐；完整离线包自带运行时，适合无网络电脑，业务功能和数据格式相同。</p></section>
+      <article className="download-channel-card"><Github size={21} />{channelTitle("github", "GitHub")}<p>查看正式发布、版本说明与安装包</p></article>
+      {(["lanzou", "baidu"] as const).map(id => <article className="download-channel-card" key={id}><HardDriveDownload size={21} />{channelTitle(id, id === "lanzou" ? "蓝奏云" : "百度网盘")}<p>浏览器打开分享页，手动下载安装包</p><p>提取码：{channels.find(item => item.id === id)?.extractionCode ?? "未提供"}</p></article>)}
+    </div><p className="about-meta">手动安装前，请先保存并退出礼金簿，再运行安装包，保留已有礼金库。网盘文件由人工维护，请核对版本号。</p></section>
 
     {candidate?.releaseNotes && <section className="about-card"><details className="release-notes-details" open><summary>新版本 v{candidate.version} 更新明细</summary><pre>{candidate.releaseNotes}</pre></details></section>}
     <section className="about-card"><details className="release-notes-details" open><summary className="about-card-heading"><div><span className="about-label">当前版本与历史记录</span><strong>更新明细</strong></div><ChevronDown size={16} /></summary><pre>{CURRENT_RELEASE_NOTES}</pre></details></section>

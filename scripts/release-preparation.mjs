@@ -57,7 +57,7 @@ async function publishStaging(staging, destination) {
   }
 }
 
-export async function prepareRelease(root, version, notes, installerDirectory) {
+export async function prepareRelease(root, version, notes, installerDirectory, includeOffline = true) {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error("Invalid version");
   const paths = releasePaths(root, version);
   await assertBoundDirectory(paths.root, paths.target);
@@ -74,15 +74,18 @@ export async function prepareRelease(root, version, notes, installerDirectory) {
   const [exeBytes, installerBytes] = await Promise.all([readFile(sourceExe), readFile(sourceInstaller)]);
   const signature = (await readFile(sourceInstaller + ".sig", "utf8")).trim();
   const offline = localInstallerName(version, true), offlinePath = join(sourceDirectory, offline);
-  await assertBoundDirectory(paths.root, offlinePath);
-  await assertBoundDirectory(paths.root, offlinePath + ".sig");
-  const offlineBytes = await readFile(offlinePath);
-  const offlineSignature = (await readFile(offlinePath + ".sig", "utf8")).trim();
+  let offlineBytes = null, offlineSignature = null;
+  if (includeOffline) {
+    await assertBoundDirectory(paths.root, offlinePath);
+    await assertBoundDirectory(paths.root, offlinePath + ".sig");
+    offlineBytes = await readFile(offlinePath);
+    offlineSignature = (await readFile(offlinePath + ".sig", "utf8")).trim();
+  }
   const channelsPath = join(paths.root, "update-channels.json");
   await assertBoundDirectory(paths.root, channelsPath);
   const { publicKey } = JSON.parse(await readFile(channelsPath, "utf8"));
   verifyUpdateSignature(installerBytes, signature, publicKey, version);
-  verifyUpdateSignature(offlineBytes, offlineSignature, publicKey, version);
+  if (offlineBytes && offlineSignature) verifyUpdateSignature(offlineBytes, offlineSignature, publicKey, version);
   const manifest = createUpdateManifest(version, notes, signature);
   const staging = join(paths.root, ".release-" + randomUUID());
   await assertBoundDirectory(paths.root, staging);
@@ -92,12 +95,15 @@ export async function prepareRelease(root, version, notes, installerDirectory) {
     await writeFile(join(staging, installer), installerBytes, { flag: "wx" });
     await writeFile(join(staging, installer + ".sig"), signature + "\n", { flag: "wx" });
     await writeFile(join(staging, "latest.json"), JSON.stringify(manifest, null, 2) + "\n", { flag: "wx" });
-    await writeFile(join(staging, offline), offlineBytes, { flag: "wx" });
-    await writeFile(join(staging, offline + ".sig"), offlineSignature + "\n", { flag: "wx" });
+    if (offlineBytes && offlineSignature) {
+      await writeFile(join(staging, offline), offlineBytes, { flag: "wx" });
+      await writeFile(join(staging, offline + ".sig"), offlineSignature + "\n", { flag: "wx" });
+    }
     await writeFile(join(staging, "RELEASE_NOTES.md"), notes, { flag: "wx" });
-    await writeFile(join(staging, "README.md"), "# 礼金簿 " + version + "\n\n标准安装包优先使用系统 WebView2；缺少时需联网安装。offline 安装包自带固定运行时，供离线安装备用。\n便携 EXE 要求系统已安装 WebView2，或手动保留完整 webview2-fixed；自动更新前必须手动安装，标准安装器随后创建安装版快捷方式。\n业务数据仍完全离线。安装版支持验签更新；SHA256仅检查意外损坏。安装包无 Windows Authenticode 证书。\n", { flag: "wx" });
+    await writeFile(join(staging, "README.md"), "# 礼金簿 " + version + "\n\n标准安装包优先使用系统 WebView2；缺少时需联网安装。\n业务数据仍完全离线。安装版支持验签更新；SHA256仅检查意外损坏。安装包无 Windows Authenticode 证书。\n", { flag: "wx" });
     const hash = bytes => createHash("sha256").update(bytes).digest("hex").toUpperCase();
-    await writeFile(join(staging, "SHA256SUMS.txt"), hash(exeBytes) + "  " + executable + "\n" + [ [installer, installerBytes, false], [offline, offlineBytes, true] ].map(([name, bytes, mode]) => hash(bytes) + "  " + name + "\n" + hash(bytes) + "  " + releaseInstallerName(version, mode) + "\n").join(""), { flag: "wx" });
+    const installers = [[installer, installerBytes, false], ...(offlineBytes ? [[offline, offlineBytes, true]] : [])];
+    await writeFile(join(staging, "SHA256SUMS.txt"), hash(exeBytes) + "  " + executable + "\n" + installers.map(([name, bytes, mode]) => hash(bytes) + "  " + name + "\n" + hash(bytes) + "  " + releaseInstallerName(version, mode) + "\n").join(""), { flag: "wx" });
     await assertBoundDirectory(paths.root, staging);
     await assertBoundDirectory(paths.root, paths.destination);
     await mkdir(dirname(paths.destination), { recursive: true });
