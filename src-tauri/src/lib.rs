@@ -6986,10 +6986,12 @@ fn restore_selected_audit_records(
 #[tauri::command(async)]
 fn clear_audit_logs(
     ids: Option<Vec<String>>,
+    pin: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let _operation = begin_operation()?;
+    authorize_empty_trash(&state, &pin)?;
     let connection = admin_connection(&state, &vault_path, "clear-audit-logs", false)?;
     delete_audit_logs(&connection, &ids.unwrap_or_default())?;
     Ok(())
@@ -8540,6 +8542,7 @@ mod tests {
         assert!(authorize_empty_trash(&state, "123456").is_err());
         assert!(state.session.lock().unwrap().edit_locked);
         set_edit_locked(&state, false).unwrap();
+        assert!(authorize_empty_trash(&state, "654321").is_err());
         authorize_empty_trash(&state, "123456").unwrap();
         assert!(state.session.lock().unwrap().role == SessionRole::Admin);
         assert!(!state.session.lock().unwrap().edit_locked);

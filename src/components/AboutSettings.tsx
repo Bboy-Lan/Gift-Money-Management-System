@@ -47,7 +47,7 @@ export function AboutSettings(props: Props) {
       {(["lanzou", "baidu"] as const).map(id => <article className="download-channel-card" key={id}><HardDriveDownload size={21} />{channelTitle(id, id === "lanzou" ? "蓝奏云" : "百度网盘")}<p>浏览器打开分享页，手动下载安装包</p><p>提取码：{channels.find(item => item.id === id)?.extractionCode ?? "未提供"}</p></article>)}
     </div><p className="about-meta">手动安装前，请先保存并退出礼金簿，再运行安装包，保留已有礼金库。网盘文件由人工维护，请核对版本号。</p></section>
 
-    {candidate?.releaseNotes && <section className="about-card"><details className="release-notes-details" open><summary>新版本 v{candidate.version} 更新明细</summary><pre>{candidate.releaseNotes}</pre></details></section>}
+    {candidate && <section className="about-card"><details className="release-notes-details"><summary>新版本 v{candidate.version} 更新明细</summary><pre>{candidate.releaseNotes?.trim() || "该版本暂未提供更新说明，请查看项目发布信息。"}</pre></details></section>}
     <section className="about-card"><details className="release-notes-details" open><summary className="about-card-heading"><div><span className="about-label">当前版本与历史记录</span><strong>更新明细</strong></div><ChevronDown size={16} /></summary><pre>{CURRENT_RELEASE_NOTES}</pre></details></section>
     <section className="about-card about-project-info"><span>作者 Bboy-Lan</span><button className="text-link" type="button" onClick={() => open("github")}>项目发布页<ExternalLink size={12} /></button><button className="text-link" type="button" onClick={props.onShowLicense}>MIT License · 查看许可</button>{props.licenseOpen && props.licenseText && <pre className="license-preview">{props.licenseText}</pre>}</section>
   </section>;

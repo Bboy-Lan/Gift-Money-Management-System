@@ -95,7 +95,7 @@ function createApi(invoke: typeof import("@tauri-apps/api/core").invoke) { retur
   restoreTrashItem: (kind: TrashItem["kind"], id: string, vaultPath: string | null) => invoke<void>("restore_trash_item", { kind, id, vaultPath }),
   emptyTrash: (pin: string) => invoke<void>("empty_trash", { pin }),
   listAuditLogs: () => invoke<AuditLog[]>("list_audit_logs"),
-  clearAuditLogs: (ids: string[] = []) => invoke<void>("clear_audit_logs", { ids }),
+  clearAuditLogs: (ids: string[], pin: string) => invoke<void>("clear_audit_logs", { ids, pin }),
   restoreAuditLogs: (ids: string[]) => invoke<void>("restore_audit_logs", { ids }),
   listPeople: (search: string, tagSearch = "", bookId: string | null = null) => invoke<Person[]>("list_people", { search, tagSearch, bookId }),
   listTags: () => invoke<Tag[]>("list_tags"),

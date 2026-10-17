@@ -50,10 +50,10 @@ test("ledger tables show return amount and history deletion supports selected re
   assert.match(source, /selectedHistoryIds/);
   assert.match(source, /const \[selectionMode, setSelectionMode\]/);
   assert.match(source, /selectionMode && <th className="audit-select-column">/);
-  assert.match(source, /clearHistory\.mutate\(selectionMode \? selectedRecords : \(history\.data \?\? \[\]\)\)/);
+  assert.match(source, /clearHistory\.mutate\(\{ records: selectionMode \? selectedRecords : \(history\.data \?\? \[\]\), pin \}\)/);
   assert.match(source, /删除改动信息/);
   assert.match(source, /<td className="muted audit-book">\{record\.bookTitle \|\| "礼金库"\}<\/td>/);
-  assert.match(apiSource, /clearAuditLogs: \(ids: string\[\] = \[\]\) => invoke<void>\("clear_audit_logs", \{ ids \}\)/);
+  assert.match(apiSource, /clearAuditLogs: \(ids: string\[\], pin: string\) => invoke<void>\("clear_audit_logs", \{ ids, pin \}\)/);
   assert.match(apiSource, /restoreAuditLogs: \(ids: string\[\]\) => invoke<void>\("restore_audit_logs", \{ ids \}\)/);
 });
 

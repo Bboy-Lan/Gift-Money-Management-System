@@ -826,7 +826,7 @@ mod tests {
         assert_eq!(channels[0]["id"], "github");
         assert_eq!(
             channels[0]["url"],
-            "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases"
+            "https://github.com/Bboy-Lan/Gift-Money-Management-System"
         );
         assert_eq!(channels[1]["id"], "lanzou");
         assert_eq!(channels[1]["url"], "https://wwaxt.lanzouu.com/b01i5xguqb");

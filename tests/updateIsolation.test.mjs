@@ -20,7 +20,7 @@ await writeFile(bundle, compiled.outputFiles[0].text);
 const { AboutSettings } = await import(bundle.href); await unlink(bundle);
 const props = { updatePhase: "idle", checkedAt: "尚未检查", onCheckUpdate() {}, onInstallUpdate() {}, onShowLicense() {}, licenseOpen: false, licenseText: null };
 const channels = [
-  { id: "github", label: "GitHub 下载", url: "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases" },
+  { id: "github", label: "GitHub 下载", url: "https://github.com/Bboy-Lan/Gift-Money-Management-System" },
   { id: "lanzou", label: "蓝奏云", url: "https://wwaxt.lanzouu.com/b01i5xguqb", extractionCode: "Niko" },
   { id: "baidu", label: "百度网盘", url: "https://pan.baidu.com/s/1aTT_M2aBvope8K-fhYB0Tg?pwd=Niko", extractionCode: "Niko" },
 ];
@@ -51,6 +51,19 @@ test("public channel configuration exposes the approved manual shares", async ()
   assert.equal(config.baiduUrl, channels[2].url);
   assert.equal(config.lanzouExtractionCode, "Niko");
   assert.equal(config.baiduExtractionCode, "Niko");
+});
+
+test("available version notes are collapsible and show the candidate, not current notes", () => {
+  const status = { configured: true, installed: true, candidate: { id: 'next', version: '0.4.36', source: 'github', releaseNotes: '新功能详情' }, channels };
+  const html = renderToStaticMarkup(React.createElement(AboutSettings, { ...props, updateStatus: status }));
+  const dom = new JSDOM(html);
+  const details = [...dom.window.document.querySelectorAll('details')].find((item) => item.textContent.includes('新版本 v0.4.36'));
+  assert.ok(details);
+  assert.equal(details.open, false);
+  assert.match(details.textContent, /新功能详情/);
+  dom.window.close();
+  const fallback = renderToStaticMarkup(React.createElement(AboutSettings, { ...props, updateStatus: { ...status, candidate: { ...status.candidate, releaseNotes: null } } }));
+  assert.match(fallback, /该版本暂未提供更新说明/);
 });
 
 test("real update hook routes buttons and shows manual fallback after check and download failures", async () => {

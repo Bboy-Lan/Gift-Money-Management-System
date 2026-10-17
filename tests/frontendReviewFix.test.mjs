@@ -101,6 +101,55 @@ test('real ConfirmHistoryClear forwards pending through X backdrop Escape and wo
   } finally { await view.close(); }
 });
 
+test('history deletion requires and forwards a valid PIN', async () => {
+  const pins = [];
+  const view = await mount(production.ConfirmHistoryClear, { selectedCount: 1, isClearing: false, onClose: noop, onConfirm: (pin) => pins.push(pin) });
+  try {
+    const submit = button(view.container, '删除选中记录');
+    assert.equal(submit.disabled, true);
+    await input(view.container.querySelector('input[type=password]'), '123456');
+    assert.equal(submit.disabled, false);
+    await click(submit);
+    assert.deepEqual(pins, ['123456']);
+  } finally { await view.close(); }
+});
+
+test('sidebar selection returns to the chosen ledger even when already selected', async () => {
+  const view = await mount(production.VaultWorkspace, workspaceProps);
+  try {
+    await click(button(view.container, '回礼明细'));
+    await click(button(view.container, '甲簿'));
+    assert.ok(view.container.querySelector('.content-view.entries'));
+    await click(button(view.container, '历史改动'));
+    await click(button(view.container, '乙簿'));
+    assert.ok(view.container.querySelector('.content-view.entries'));
+    assert.match(view.container.querySelector('.content-heading h2').textContent, /乙簿/);
+  } finally { await view.close(); }
+});
+
+test('double-click return gift traces exact live record and missing history shows notice', async () => {
+  const entry = { id: 'entry-1', bookId: bookB.id, personId: 'person-1', personName: '张三', address: null, amountFen: 100, paymentMethod: '现金', receivedAt: '2026-01-01', note: null, returnGift: null, returnGiftAmountFen: 100, returnGiftedAt: '2026-01-01', tags: [], tagNames: [] };
+  const gift = { entryId: entry.id, bookId: bookB.id, bookTitle: bookB.title, personId: entry.personId, personName: entry.personName, address: null, returnGiftAmountFen: 100, returnGiftedAt: '2026-01-01', returnGift: null, tags: [] };
+  const audit = { id: 'audit-1', entityId: 'deleted', entityType: 'gift_entry', action: 'delete', target: '已删除', bookTitle: '乙簿', description: '删除', changes: [], createdAt: '2026-01-01', reversible: false, reversibleReason: null };
+  globalThis.__reviewInvoke = async (command, args) => command === 'list_books' ? [bookA, bookB] : command === 'list_entries' ? (args.bookId === bookB.id ? [entry] : []) : [];
+  const client = clientForWorkspace();
+  client.setQueryData(['return-gifts', 'A'], [gift]);
+  client.setQueryData(['entries', 'A', bookB.id], [entry]);
+  client.setQueryData(['audit-logs', 'A'], [audit]);
+  const notices = [];
+  const view = await mount(production.VaultWorkspace, { ...workspaceProps, initialEntryId: null, onNotice: (message) => notices.push(message) }, client);
+  try {
+    await click(button(view.container, '回礼明细'));
+    await act(async () => { view.container.querySelector('.returnGifts tbody tr').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    assert.ok(view.container.querySelector('#entry-entry-1.search-focused'));
+    assert.match(view.container.querySelector('.content-heading h2').textContent, /乙簿/);
+    await click(button(view.container, '历史改动'));
+    await act(async () => { view.container.querySelector('.history tbody tr').dispatchEvent(new window.MouseEvent('dblclick', { bubbles: true })); await new Promise((resolve) => setTimeout(resolve, 20)); });
+    assert.ok(notices.some((notice) => notice.includes('找不到来源礼金记录')));
+    assert.ok(view.container.querySelector('.content-view.history'));
+  } finally { await view.close(); }
+});
+
 test('started PeopleView mutation refreshes captured A with same IDs while avoiding old-view callbacks after mounting B', async () => {
   const pending = deferred(); const tags = [{ id: 'same-tag', name: '亲友', color: '#123456' }]; const calls = []; let oldActivity = 0; const errors = [];
   const person = { id: 'same-person', displayName: '张三', address: null, notes: null, tags: [], totalFen: 100, giftCount: 1 };
