@@ -773,7 +773,9 @@ mod tests {
     #[test]
     fn manifests_require_variant_identity_stable_and_newer_three_part_version() {
         let valid = json!({"productId":"com.codex.lijinbook.remediation", "channel":"stable"});
-        assert!(super::validate_manifest(&valid, "0.4.34").is_ok());
+        let [major, minor, patch] = crate::parse_release_version(crate::APP_VERSION).unwrap();
+        let next_patch = format!("{major}.{minor}.{}", patch + 1);
+        assert!(super::validate_manifest(&valid, &next_patch).is_ok());
         for version in [
             "0.4.27",
             "0.4.28",
@@ -827,7 +829,7 @@ mod tests {
             "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases"
         );
         assert_eq!(channels[1]["id"], "lanzou");
-        assert_eq!(channels[1]["url"], "https://wwaxt.lanzouu.com/ifcV14c5cnre");
+        assert_eq!(channels[1]["url"], "https://wwaxt.lanzouu.com/b01i5xds8d");
         assert_eq!(channels[1]["extractionCode"], "Niko");
         assert_eq!(channels[2]["id"], "baidu");
         assert_eq!(
