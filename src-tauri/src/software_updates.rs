@@ -829,7 +829,7 @@ mod tests {
             "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases"
         );
         assert_eq!(channels[1]["id"], "lanzou");
-        assert_eq!(channels[1]["url"], "https://wwaxt.lanzouu.com/b01i5xds8d");
+        assert_eq!(channels[1]["url"], "https://wwaxt.lanzouu.com/b01i5xguqb");
         assert_eq!(channels[1]["extractionCode"], "Niko");
         assert_eq!(channels[2]["id"], "baidu");
         assert_eq!(

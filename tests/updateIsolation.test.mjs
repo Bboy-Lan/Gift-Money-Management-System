@@ -21,7 +21,7 @@ const { AboutSettings } = await import(bundle.href); await unlink(bundle);
 const props = { updatePhase: "idle", checkedAt: "尚未检查", onCheckUpdate() {}, onInstallUpdate() {}, onShowLicense() {}, licenseOpen: false, licenseText: null };
 const channels = [
   { id: "github", label: "GitHub 下载", url: "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases" },
-  { id: "lanzou", label: "蓝奏云", url: "https://wwaxt.lanzouu.com/b01i5xds8d", extractionCode: "Niko" },
+  { id: "lanzou", label: "蓝奏云", url: "https://wwaxt.lanzouu.com/b01i5xguqb", extractionCode: "Niko" },
   { id: "baidu", label: "百度网盘", url: "https://pan.baidu.com/s/1aTT_M2aBvope8K-fhYB0Tg?pwd=Niko", extractionCode: "Niko" },
 ];
 test("three download card titles open the configured share pages and show public extraction codes", () => {
