@@ -23,6 +23,10 @@ export function recentVaultIdentity(recent: Pick<RecentVault, "path" | "bookId">
   return `${recent.path}\u001f${recent.bookId ?? ""}`;
 }
 
+function recentVaultPathKey(path: string) {
+  return path.trim().replaceAll("/", "\\").toLocaleLowerCase();
+}
+
 export function readRecentVaults(storage?: Storage): RecentVault[] {
   const target = getStorage(storage);
   if (!target) return [];
@@ -79,6 +83,18 @@ export function forgetRecentVault(recent: Pick<RecentVault, "path" | "bookId">, 
   const target = getStorage(storage);
   const identity = recentVaultIdentity(recent);
   const next = readRecentVaults(target ?? undefined).filter((item) => recentVaultIdentity(item) !== identity);
+  try {
+    target?.setItem(STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Local history is optional.
+  }
+  return next;
+}
+
+export function forgetRecentVaultPath(path: string, storage?: Storage): RecentVault[] {
+  const target = getStorage(storage);
+  const key = recentVaultPathKey(path);
+  const next = readRecentVaults(target ?? undefined).filter((item) => recentVaultPathKey(item.path) !== key);
   try {
     target?.setItem(STORAGE_KEY, JSON.stringify(next));
   } catch {

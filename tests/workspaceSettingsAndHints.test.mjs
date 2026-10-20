@@ -122,6 +122,25 @@ test("first-time users can start creating a vault without finding the settings u
   assert.match(source, /onUnlock=\{\(\) => \{ setEnterWorkspaceAfterAdmin\(false\); setPendingWorkspaceVault\(null\); setAdminPrompt\(session.securityConfigured \? "unlock" : "setup"\); \}\}/);
   assert.match(source, /尚未打开礼金库/);
   assert.match(source, /设置管理员 PIN 后即可创建礼金库并开始登记/);
+  assert.match(source, /className="vault-onboarding"/);
+  assert.match(source, /礼金库包含礼金簿/);
+  assert.match(source, /王家礼金库/);
+  assert.match(source, /王伟婚礼礼金、搬新房礼金/);
+  assert.match(source, /一个家庭或一份可移动的 \.giftvault 文件/);
+  assert.match(source, /先新建礼金库，再在库内新建礼金簿/);
+});
+
+test("missing recent vaults are removed and enter the no-vault workspace without resetting the PIN", async () => {
+  const [source, styles] = await Promise.all([
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
+  ]);
+  assert.match(source, /forgetRecentVaultPath\(opened\.recent\.path\)/);
+  assert.match(source, /setWorkspaceOpen\(true\)/);
+  assert.match(source, /已移除失效记录；请打开已有礼金库或新建礼金库/);
+  assert.match(source, /setAdminPrompt\(session\.securityConfigured \? "unlock" : "setup"\)/);
+  assert.match(styles, /\.vault-onboarding-flow/);
+  assert.match(styles, /\.vault-onboarding-step/);
 });
 
 test("settings includes a donation page with bundled QR images", async () => {

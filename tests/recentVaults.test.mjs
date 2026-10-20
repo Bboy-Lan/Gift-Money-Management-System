@@ -50,3 +50,15 @@ test("recent book identity distinguishes books sharing a vault path", async () =
     recentVaultIdentity({ path: "D:/family.giftvault", name: "B", bookId: "book-b" }),
   );
 });
+
+test("forgetting an unavailable vault removes every recent book entry for that file", async () => {
+  const { forgetRecentVaultPath, readRecentVaults } = await loadRecentVaults();
+  const storage = new MemoryStorage();
+  storage.setItem("lijin-book.recent-vaults", JSON.stringify([
+    { path: "D:/missing.giftvault", name: "旧库", bookId: "a" },
+    { path: "D:/missing.giftvault", name: "旧库", bookId: "b" },
+    { path: "D:/available.giftvault", name: "现有库", bookId: "c" },
+  ]));
+  forgetRecentVaultPath("D:/missing.giftvault", storage);
+  assert.deepEqual(readRecentVaults(storage).map((item) => item.path), ["D:/available.giftvault"]);
+});

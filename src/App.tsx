@@ -42,7 +42,7 @@ import { SoftwareUpdateContext, useSoftwareUpdates } from "./hooks/useSoftwareUp
 import { updateStatusMessage, type UpdatePhase } from "./lib/softwareUpdates";
 import { invalidateVaultQueries } from "./lib/vaultQueries";
 import { allowFormClose, canRestoreAudit, firstCharacter, validateChangedDate, validateChangedText } from "./lib/viewSafety";
-import { forgetRecentVault, readRecentVaults, recentVaultIdentity, rememberRecentVault, type RecentVault } from "./lib/recentVaults";
+import { forgetRecentVault, forgetRecentVaultPath, readRecentVaults, recentVaultIdentity, rememberRecentVault, type RecentVault } from "./lib/recentVaults";
 import { orderGiftBooks, readComparisonVaults, readGiftBookOrder, rememberGiftBookOrder } from "./lib/comparisonVaults";
 import { closeVaultSession, navigateVaultResult, readOpenedVaultSessions, rememberOpenedVaultSessions, type OpenedVaultSessionState } from "./lib/openedVaultSessions";
 import { readOpenedVaultOrder, rememberOpenedVaultOrder } from "./lib/openedVaultOrder";
@@ -484,11 +484,15 @@ function App() {
     }
     if (!restored.length) {
       const saved = savedSessions[0];
-      setError(`上次打开的礼金库路径已失效或内容已变化：${saved.path}。请使用“打开礼金库”重新选择文件`);
+      rememberOpenedVaultSessions([]);
+      showNotice(`上次打开的礼金库路径已失效：${saved.path}。请打开已有礼金库或新建礼金库`);
       return false;
     }
     const active = (preferredKey ? restored.find((item) => vaultPathKey(item.session.path) === preferredKey) : undefined) ?? restored[0];
-    if (invalidPaths.length) setError(`有 ${invalidPaths.length} 个上次打开的礼金库路径已失效，请重新选择文件打开：${invalidPaths[0]}`);
+    if (invalidPaths.length) {
+      rememberOpenedVaultSessions(restored.map(({ session }) => session), active.session.path);
+      showNotice(`有 ${invalidPaths.length} 个上次打开的礼金库路径已失效，已从本次恢复列表移除`);
+    }
     const activeResult = await api.openVault(active.session.path);
     client.clear();
     setOpenedVaults(restored.map(({ session, result }) => ({ vault: result.vault, activeBookId: session.activeBookId, activeTab: session.activeTab })));
@@ -510,14 +514,12 @@ function App() {
       : await openRecentVaults(recentVaults, api.openVault);
     const launchTarget = resolveWorkspaceLaunchTarget(opened.status);
     if (launchTarget === "workspace-start") {
+      if (opened.status === "failed") {
+        setRecentVaults(forgetRecentVaultPath(opened.recent.path));
+        showNotice(`最近使用的礼金库「${opened.recent.name}」无法打开，已移除失效记录；请打开已有礼金库或新建礼金库`);
+      }
       setPendingWorkspaceBookId(null);
       setWorkspaceOpen(true);
-      return;
-    }
-    if (launchTarget === "start-page" && opened.status === "failed") {
-      setPendingWorkspaceBookId(null);
-      setWorkspaceOpen(false);
-      setError(`无法打开最近使用的礼金库「${opened.recent.name}」：${opened.error}`);
       return;
     }
     if (launchTarget !== "vault" || opened.status !== "opened") return;
@@ -841,7 +843,17 @@ function WelcomeScreen(props: { recentVaults: RecentVault[]; session: SessionSta
 
 function WorkspaceStart({ session, pendingSpreadsheetPaths, onClose, onOpenVault, onBeginCreate, onChooseImport, onUnlock, onChangePin }: { session: SessionStatus; pendingSpreadsheetPaths: string[]; onClose: () => void; onOpenVault: () => void; onBeginCreate: () => void; onChooseImport: () => void; onUnlock: () => void; onChangePin: () => void }) {
   const isAdmin = session.role === "admin";
-  return <div className="app-shell workspace-start"><header className="topbar"><div className="topbar-brand"><div className="brand-mark small"><BookOpen size={17} /></div><strong>礼金簿管理</strong><span className="slash">/</span><span className="vault-label">未打开礼金库</span></div><div className="topbar-actions"><span className={`role-badge ${isAdmin ? "admin" : "viewer"}`}>{isAdmin ? "管理员模式" : "用户模式"}</span>{isAdmin && <button className="secondary-button compact" title="修改管理员 PIN" onClick={onChangePin}><KeyRound size={14} />修改 PIN</button>}<button className="secondary-button compact return-start-button" title="返回启动页" onClick={onClose}><ArrowLeft size={15} />返回启动页</button></div></header><div className="workspace"><aside className="sidebar"><div className="sidebar-heading"><span>礼金簿管理</span></div>{isAdmin ? <button className="sidebar-create" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button> : <button className="sidebar-create" onClick={onUnlock}><Unlock size={16} />解锁管理并新建礼金库</button>}<button className="sidebar-create sidebar-open" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin && <button className="sidebar-create sidebar-import" onClick={onChooseImport}><FileSpreadsheet size={15} />导入表格</button>}<div className="sidebar-bottom"><VersionBadge /></div></aside><main className="content-area"><section className="workspace-empty"><BookOpen size={30} /><h2>尚未打开礼金库</h2><div className="workspace-empty-actions"><button className="primary-button" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin ? <button className="secondary-button" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button> : <button className="secondary-button" onClick={onUnlock}><Unlock size={16} />解锁管理并新建礼金库</button>}</div>{isAdmin && pendingSpreadsheetPaths.length > 0 && <span className="field-hint">已暂存 {pendingSpreadsheetPaths.length} 个表格文件。</span>}</section></main></div></div>;
+  return (
+    <div className="app-shell workspace-start">
+      <header className="topbar"><div className="topbar-brand"><div className="brand-mark small"><BookOpen size={17} /></div><strong>礼金簿管理</strong><span className="slash">/</span><span className="vault-label">未打开礼金库</span></div><div className="topbar-actions"><span className={`role-badge ${isAdmin ? "admin" : "viewer"}`}>{isAdmin ? "管理员模式" : "用户模式"}</span>{isAdmin && <button className="secondary-button compact" title="修改管理员 PIN" onClick={onChangePin}><KeyRound size={14} />修改 PIN</button>}<button className="secondary-button compact return-start-button" title="返回启动页" onClick={onClose}><ArrowLeft size={15} />返回启动页</button></div></header>
+      <div className="workspace"><aside className="sidebar"><div className="sidebar-heading"><span>礼金簿管理</span></div>{isAdmin ? <button className="sidebar-create" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button> : <button className="sidebar-create" onClick={onUnlock}><Unlock size={16} />解锁管理并新建礼金库</button>}<button className="sidebar-create sidebar-open" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin && <button className="sidebar-create sidebar-import" onClick={onChooseImport}><FileSpreadsheet size={15} />导入表格</button>}<div className="sidebar-bottom"><VersionBadge /></div></aside>
+        <main className="content-area"><section className="workspace-empty"><BookOpen size={30} /><h2>尚未打开礼金库</h2><div className="workspace-empty-actions"><button className="primary-button" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin ? <button className="secondary-button" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button> : <button className="secondary-button" onClick={onUnlock}><Unlock size={16} />解锁管理并新建礼金库</button>}</div>
+          <section className="vault-onboarding" aria-label="礼金库与礼金簿使用流程"><div className="vault-onboarding-heading"><Info size={16} /><strong>开始使用</strong><span>礼金库包含礼金簿</span></div><div className="vault-onboarding-flow"><article><span className="vault-onboarding-step">1</span><Archive size={18} /><div><strong>新建礼金库</strong><span>例如：王家礼金库</span><small>一个家庭或一份可移动的 .giftvault 文件</small></div></article><ArrowRight className="vault-onboarding-arrow" size={18} /><article><span className="vault-onboarding-step">2</span><BookOpen size={18} /><div><strong>在库内新建礼金簿</strong><span>王伟婚礼礼金、搬新房礼金</span><small>一本礼金簿对应一次办事或一个场景</small></div></article><ArrowRight className="vault-onboarding-arrow" size={18} /><article><span className="vault-onboarding-step">3</span><Gift size={18} /><div><strong>登记礼金</strong><span>来宾、金额、地址、标签与回礼</span><small>记录会保存在对应礼金簿中</small></div></article></div><p>第一次使用：先新建礼金库，再在库内新建礼金簿。已有数据：选择“打开礼金库”并找到原来的 .giftvault 文件。</p></section>
+          {isAdmin && pendingSpreadsheetPaths.length > 0 && <span className="field-hint">已暂存 {pendingSpreadsheetPaths.length} 个表格文件。</span>}
+        </section></main>
+      </div>
+    </div>
+  );
 }
 
 function CreateVaultModal({ error, isSaving, vaultName, vaultNotes, onNameChange, onNotesChange, onClose, onCreate }: { error: unknown; isSaving: boolean; vaultName: string; vaultNotes: string; onNameChange: (value: string) => void; onNotesChange: (value: string) => void; onClose: () => void; onCreate: () => void }) {

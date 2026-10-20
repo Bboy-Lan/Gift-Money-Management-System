@@ -6,8 +6,7 @@ export type RecentOpenStatus = "none" | "failed" | "opened";
 export type WorkspaceLaunchTarget = "workspace-start" | "start-page" | "vault";
 
 export function resolveWorkspaceLaunchTarget(status: RecentOpenStatus): WorkspaceLaunchTarget {
-  if (status === "none") return "workspace-start";
-  if (status === "failed") return "start-page";
+  if (status === "none" || status === "failed") return "workspace-start";
   return "vault";
 }
 

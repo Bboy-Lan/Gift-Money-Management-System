@@ -53,7 +53,7 @@ test("startup recovery does not fall back to an older record after the latest pa
   assert.deepEqual(attempted, [first.path]);
 });
 
-test("admin entry with no recent records opens the workspace start page", async () => {
+test("missing recent vault enters the workspace start page instead of trapping the startup screen", async () => {
   const { openRecentVaults, resolveWorkspaceLaunchTarget } = await loadWorkspaceLaunch();
   const opened = await openRecentVaults([], async () => {
     throw new Error("不应尝试打开不存在的记录");
@@ -61,6 +61,6 @@ test("admin entry with no recent records opens the workspace start page", async 
 
   assert.equal(opened.status, "none");
   assert.equal(resolveWorkspaceLaunchTarget(opened.status), "workspace-start");
-  assert.equal(resolveWorkspaceLaunchTarget("failed"), "start-page");
+  assert.equal(resolveWorkspaceLaunchTarget("failed"), "workspace-start");
   assert.equal(resolveWorkspaceLaunchTarget("opened"), "vault");
 });
