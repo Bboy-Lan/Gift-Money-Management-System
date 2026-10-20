@@ -34,3 +34,18 @@ test("standard release rebuilds and verifies the versioned executable before bun
   assert.match(source, /buildStandardInstaller/);
   assert.match(source, /assertWindowsExecutableVersion/);
 });
+
+test("NSIS installs outside the desktop and refreshes one fixed desktop shortcut", async () => {
+  const source = await readFile(new URL("../src-tauri/nsis/installer.nsi", import.meta.url), "utf8");
+
+  assert.doesNotMatch(source, /!insertmacro MUI_PAGE_DIRECTORY/);
+  assert.match(source, /Var LegacyDesktopInstallDir/);
+  assert.match(source, /Call MigrateLegacyDesktopInstallLocation/);
+  assert.match(source, /Call RestorePreviousInstallLocation\r?\n\s*\$\{EndIf\}\r?\n\s*\r?\n\s*; \/UPDATE may supply[\s\S]*?Call MigrateLegacyDesktopInstallLocation/);
+  assert.match(source, /Function MigrateLegacyDesktopInstallLocation/);
+  assert.match(source, /StrCpy \$INSTDIR "\$LOCALAPPDATA\\\$\{PRODUCTNAME\}"/);
+  assert.match(source, /Call RemoveLegacyDesktopInstall/);
+  assert.match(source, /Function RemoveLegacyDesktopInstall/);
+  assert.match(source, /Delete "\$DESKTOP\\\$\{PRODUCTNAME\}\.lnk"/);
+  assert.match(source, /CreateShortcut "\$DESKTOP\\\$\{PRODUCTNAME\}\.lnk" "\$INSTDIR\\\$\{MAINBINARYNAME\}\.exe"/);
+});

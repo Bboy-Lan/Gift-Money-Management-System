@@ -76,6 +76,7 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
+Var LegacyDesktopInstallDir
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -393,10 +394,6 @@ Function PageLeaveReinstall
   reinst_done:
 FunctionEnd
 
-; 5. Choose install directory page
-!define MUI_PAGE_CUSTOMFUNCTION_PRE SkipIfPassive
-!insertmacro MUI_PAGE_DIRECTORY
-
 ; 6. Start menu shortcut page
 Var AppStartMenuFolder
 !if "${STARTMENUFOLDER}" != ""
@@ -415,10 +412,7 @@ Var AppStartMenuFolder
 ; Don't auto jump to finish page after installation page,
 ; because the installation page has useful info that can be used debug any issues with the installer.
 !define MUI_FINISHPAGE_NOAUTOCLOSE
-; Use show readme button in the finish page as a button create a desktop shortcut
-!define MUI_FINISHPAGE_SHOWREADME
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "$(createDesktop)"
-!define MUI_FINISHPAGE_SHOWREADME_FUNCTION CreateOrUpdateDesktopShortcut
+; The installer always maintains one fixed desktop shortcut during installation.
 ; Show run app after installation.
 !define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_FUNCTION RunMainBinary
@@ -525,6 +519,10 @@ Function .onInit
 
     Call RestorePreviousInstallLocation
   ${EndIf}
+
+  ; /UPDATE may supply an existing installation directory directly. Always
+  ; normalize a legacy desktop directory after every path-resolution route.
+  Call MigrateLegacyDesktopInstallLocation
 
 
   !if "${INSTALLMODE}" == "both"
@@ -657,6 +655,9 @@ Section Install
     !insertmacro NSIS_HOOK_PREINSTALL
   !endif
 
+  ${If} $LegacyDesktopInstallDir != ""
+    !insertmacro CheckIfAppIsRunning "$LegacyDesktopInstallDir\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
+  ${EndIf}
   !insertmacro CheckIfAppIsRunning "$INSTDIR\${MAINBINARYNAME}.exe" "${PRODUCTNAME}"
 
   ; Copy main executable
@@ -733,17 +734,15 @@ Section Install
     WriteRegStr SHCTX "${UNINSTKEY}" "HelpLink" "${HOMEPAGE}"
   !endif
 
+  Call RemoveLegacyDesktopInstall
+
   ; Create start menu shortcut
   !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     Call CreateOrUpdateStartMenuShortcut
   !insertmacro MUI_STARTMENU_WRITE_END
 
-  ; Create desktop shortcut for silent and passive installers
-  ; because finish page will be skipped
-  ${If} $PassiveMode = 1
-  ${OrIf} ${Silent}
-    Call CreateOrUpdateDesktopShortcut
-  ${EndIf}
+  ; Always refresh the fixed desktop shortcut, including on in-place updates.
+  Call CreateOrUpdateDesktopShortcut
 
   !ifmacrodef NSIS_HOOK_POSTINSTALL
     !insertmacro NSIS_HOOK_POSTINSTALL
@@ -915,6 +914,35 @@ Function RestorePreviousInstallLocation
     StrCpy $INSTDIR $4
 FunctionEnd
 
+Function MigrateLegacyDesktopInstallLocation
+  StrCpy $LegacyDesktopInstallDir ""
+  ${If} $INSTDIR == "$DESKTOP\${PRODUCTNAME}"
+    StrCpy $LegacyDesktopInstallDir $INSTDIR
+    StrCpy $INSTDIR "$LOCALAPPDATA\${PRODUCTNAME}"
+  ${EndIf}
+FunctionEnd
+
+Function RemoveLegacyDesktopInstall
+  ${If} $LegacyDesktopInstallDir == ""
+    Return
+  ${EndIf}
+
+  ; Delete only installer-owned files. If the old folder contains any user file,
+  ; the final RMDir deliberately leaves that folder untouched.
+  Delete "$LegacyDesktopInstallDir\${MAINBINARYNAME}.exe"
+  {{#each resources}}
+    Delete "$LegacyDesktopInstallDir\\{{this.[1]}}"
+  {{/each}}
+  {{#each binaries}}
+    Delete "$LegacyDesktopInstallDir\\{{this}}"
+  {{/each}}
+  Delete "$LegacyDesktopInstallDir\uninstall.exe"
+  {{#each resources_ancestors}}
+  RMDir "$LegacyDesktopInstallDir\\{{this}}"
+  {{/each}}
+  RMDir "$LegacyDesktopInstallDir"
+FunctionEnd
+
 Function Skip
   Abort
 FunctionEnd
@@ -969,24 +997,8 @@ Function CreateOrUpdateStartMenuShortcut
 FunctionEnd
 
 Function CreateOrUpdateDesktopShortcut
-  ; We used to use product name as MAINBINARYNAME
-  ; migrate old shortcuts to target the new MAINBINARYNAME
-  !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
-  Pop $0
-  ${If} $0 = 1
-    !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
-    Return
-  ${EndIf}
-
-  ; Skip creating shortcut if in update mode or no shortcut mode
-  ; but always create if migrating from wix
-  ${If} $WixMode = 0
-    ${If} $UpdateMode = 1
-    ${OrIf} $NoShortcutMode = 1
-      Return
-    ${EndIf}
-  ${EndIf}
-
+  ; Replace the fixed-named link rather than creating a desktop application folder.
+  Delete "$DESKTOP\${PRODUCTNAME}.lnk"
   CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
   !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
 FunctionEnd

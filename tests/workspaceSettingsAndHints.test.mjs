@@ -123,11 +123,13 @@ test("first-time users can start creating a vault without finding the settings u
   assert.match(source, /尚未打开礼金库/);
   assert.match(source, /设置管理员 PIN 后即可创建礼金库并开始登记/);
   assert.match(source, /className="vault-onboarding"/);
-  assert.match(source, /礼金库包含礼金簿/);
+  assert.match(source, /新手使用指南/);
+  assert.match(source, /礼金库 → 礼金簿 → 礼金记录/);
   assert.match(source, /王家礼金库/);
-  assert.match(source, /王伟婚礼礼金、搬新房礼金/);
-  assert.match(source, /一个家庭或一份可移动的 \.giftvault 文件/);
-  assert.match(source, /先新建礼金库，再在库内新建礼金簿/);
+  assert.match(source, /王伟婚礼礼金簿/);
+  assert.match(source, /礼金登记/);
+  assert.match(source, /一个家庭对应一个可移动的 \.giftvault 文件/);
+  assert.match(source, /新建礼金库 → 新建礼金簿 → 开始登记/);
 });
 
 test("missing recent vaults are removed and enter the no-vault workspace without resetting the PIN", async () => {
@@ -143,14 +145,23 @@ test("missing recent vaults are removed and enter the no-vault workspace without
   assert.match(styles, /\.vault-onboarding-step/);
 });
 
-test("the no-vault workspace keeps software update downloads reachable", async () => {
-  const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+test("the no-vault workspace only highlights software updates when a candidate is available", async () => {
+  const [source, styles] = await Promise.all([
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
+  ]);
+  const start = source.slice(source.indexOf("function WorkspaceStart"), source.indexOf("function NoVaultSoftwareSettings"));
 
   assert.match(source, /const \[softwareSettingsOpen, setSoftwareSettingsOpen\] = useState\(false\)/);
-  assert.match(source, /软件设置/);
-  assert.match(source, /onOpenSoftwareSettings/);
+  assert.match(start, /updateStatus\?\.candidate/);
+  assert.match(start, /软件更新/);
+  assert.match(start, /发现新版本/);
+  assert.match(start, /<RefreshCw/);
+  assert.doesNotMatch(start, /软件设置/);
   assert.match(source, /<NoVaultSoftwareSettings/);
-  assert.match(source, /查看下载方式/);
+  assert.match(styles, /\.software-update-entry/);
+  assert.match(styles, /\.vault-onboarding-example/);
+  assert.match(styles, /\.vault-onboarding-first-use/);
 });
 
 test("settings includes a donation page with bundled QR images", async () => {
