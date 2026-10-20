@@ -140,4 +140,6 @@ test("only a backend-bound installable candidate offers one-click installation",
   assert.match(html, /新增更新提示/);
   const portable = renderToStaticMarkup(React.createElement(AboutSettings, { ...props, updateStatus: { configured: true, installed: false, candidate, channels } }));
   assert.match(portable, /安装版支持一键更新/);
+  assert.match(portable, /当前为便携运行，请使用下方下载方式安装新版本/);
+  assert.doesNotMatch(portable, />立即更新</);
 });

@@ -11,7 +11,7 @@ test("isolated delivery versions, identity, offline policy and CSP", async () =>
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const config = JSON.parse(await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"));
   const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
-  assert.equal(pkg.version, "0.4.37");
+  assert.equal(pkg.version, "0.4.38");
   assert.equal(config.version, pkg.version);
   assert.ok(cargo.includes(`version = "${pkg.version}"`));
   assert.equal(pkg.devDependencies.jsdom, "26.1.0");
@@ -29,6 +29,16 @@ test("isolated delivery versions, identity, offline policy and CSP", async () =>
   assert.ok(Buffer.from(channels.publicKey, "base64").toString("utf8").startsWith("untrusted comment:"));
   assert.ok(!config.app.security.csp.includes("unsafe-eval"));
   assert.ok(pkg.scripts.test && pkg.scripts.verify);
+});
+
+test("NSIS upgrades bypass a legacy uninstaller and overwrite in the registered installation directory", async () => {
+  const config = JSON.parse(await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"));
+  const templatePath = join(root, "src-tauri", config.bundle.windows.nsis.template);
+  const template = await readFile(templatePath, "utf8");
+
+  assert.equal(config.bundle.windows.nsis.template, "nsis/installer.nsi");
+  assert.match(template, /\$\{ElseIf\} \$R0 = 1[\s\S]*?Abort/);
+  assert.match(template, /Upgrade in place/);
 });
 
 test("release paths and build environment ignore inherited redirection", () => {

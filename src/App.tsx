@@ -198,6 +198,7 @@ function App() {
   const [session, setSession] = useState<SessionStatus>({ role: "viewer", securityConfigured: false, editLocked: true });
   const [error, setError] = useState<string | null>(null);
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
+  const [softwareSettingsOpen, setSoftwareSettingsOpen] = useState(false);
   const [createVaultOpen, setCreateVaultOpen] = useState(false);
   const [createVaultSaving, setCreateVaultSaving] = useState(false);
   const [createVaultError, setCreateVaultError] = useState<unknown>(null);
@@ -734,7 +735,7 @@ function App() {
   const installLocalUpdate = () => updates.install();
 
   const overlays = <>
-    {updates.bannerVisible && updates.status?.candidate && <div className="software-update-banner" role="status"><span>发现新版本 v{updates.status.candidate.version}</span><button className="primary-button compact" disabled={!["idle", "ready"].includes(localUpdatePhase)} onClick={() => void updates.install()}>{localUpdatePhase === "ready" ? "重启并安装" : ["downloading", "verifying"].includes(localUpdatePhase) ? "下载校验中…" : "立即更新"}</button><button className="text-button" onClick={updates.dismiss}>稍后</button></div>}
+    {updates.bannerVisible && updates.status?.candidate && <div className="software-update-banner" role="status"><span>发现新版本 v{updates.status.candidate.version}</span>{updates.status.installed ? <button className="primary-button compact" disabled={!["idle", "ready"].includes(localUpdatePhase)} onClick={() => void updates.install()}>{localUpdatePhase === "ready" ? "重启并安装" : ["downloading", "verifying"].includes(localUpdatePhase) ? "下载校验中…" : "立即更新"}</button> : <button className="primary-button compact" onClick={() => { setSoftwareSettingsOpen(true); updates.dismiss(); }}>查看下载方式</button>}<button className="text-button" onClick={updates.dismiss}>稍后</button></div>}
     {updates.error && <ErrorToast message={updates.error} onClose={updates.clearError} />}
     {dragActive && <DropOverlay />}
     {adminPrompt === "recover" && <RecoveryResetModal onClose={() => setAdminPrompt(null)} onSubmit={resetAdminPin} />}
@@ -749,14 +750,16 @@ function App() {
   if (!workspaceOpen && !vault) {
     return <SoftwareUpdateContext.Provider value={updates}><>
       <WelcomeScreen recentVaults={recentVaults} session={session} noticeVisible={Boolean(notice)} onUserMode={(recent) => void enterUserMode(recent)} onAdminMode={enterAdminMode} onRemoveRecent={(recent) => { setRecentVaults(forgetRecentVault(recent)); showNotice(`已从启动页移除「${recent.name}」的记录；礼金库和礼金数据未删除`); }} onCheckLocalUpdate={checkLocalUpdate} localUpdatePhase={localUpdatePhase} />
+      {softwareSettingsOpen && <NoVaultSoftwareSettings updatePhase={localUpdatePhase} updateStatus={updates.status} lastUpdateCheckAt={lastUpdateCheckAt} onCheckUpdate={checkLocalUpdate} onInstallUpdate={installLocalUpdate} onError={setError} onClose={() => setSoftwareSettingsOpen(false)} />}
       {overlays}
     </></SoftwareUpdateContext.Provider>;
   }
 
   if (!vault) {
     return <SoftwareUpdateContext.Provider value={updates}><>
-      <WorkspaceStart session={session} pendingSpreadsheetPaths={pendingSpreadsheetPaths} onClose={returnToStartPage} onOpenVault={openVault} onBeginCreate={() => setCreateVaultOpen(true)} onChooseImport={() => void chooseSpreadsheetPathsForWorkspace()} onUnlock={() => { setEnterWorkspaceAfterAdmin(false); setPendingWorkspaceVault(null); setAdminPrompt(session.securityConfigured ? "unlock" : "setup"); }} onChangePin={() => setPinChangeOpen(true)} />
+      <WorkspaceStart session={session} pendingSpreadsheetPaths={pendingSpreadsheetPaths} onClose={returnToStartPage} onOpenVault={openVault} onBeginCreate={() => setCreateVaultOpen(true)} onChooseImport={() => void chooseSpreadsheetPathsForWorkspace()} onUnlock={() => { setEnterWorkspaceAfterAdmin(false); setPendingWorkspaceVault(null); setAdminPrompt(session.securityConfigured ? "unlock" : "setup"); }} onChangePin={() => setPinChangeOpen(true)} onOpenSoftwareSettings={() => setSoftwareSettingsOpen(true)} />
       {createVaultOpen && <CreateVaultModal error={createVaultError} isSaving={createVaultSaving} vaultName={vaultName} vaultNotes={vaultNotes} onNameChange={setVaultName} onNotesChange={setVaultNotes} onClose={() => setCreateVaultOpen(false)} onCreate={createVault} />}
+      {softwareSettingsOpen && <NoVaultSoftwareSettings updatePhase={localUpdatePhase} updateStatus={updates.status} lastUpdateCheckAt={lastUpdateCheckAt} onCheckUpdate={checkLocalUpdate} onInstallUpdate={installLocalUpdate} onError={setError} onClose={() => setSoftwareSettingsOpen(false)} />}
       {overlays}
     </></SoftwareUpdateContext.Provider>;
   }
@@ -841,11 +844,11 @@ function WelcomeScreen(props: { recentVaults: RecentVault[]; session: SessionSta
   );
 }
 
-function WorkspaceStart({ session, pendingSpreadsheetPaths, onClose, onOpenVault, onBeginCreate, onChooseImport, onUnlock, onChangePin }: { session: SessionStatus; pendingSpreadsheetPaths: string[]; onClose: () => void; onOpenVault: () => void; onBeginCreate: () => void; onChooseImport: () => void; onUnlock: () => void; onChangePin: () => void }) {
+function WorkspaceStart({ session, pendingSpreadsheetPaths, onClose, onOpenVault, onBeginCreate, onChooseImport, onUnlock, onChangePin, onOpenSoftwareSettings }: { session: SessionStatus; pendingSpreadsheetPaths: string[]; onClose: () => void; onOpenVault: () => void; onBeginCreate: () => void; onChooseImport: () => void; onUnlock: () => void; onChangePin: () => void; onOpenSoftwareSettings: () => void }) {
   const isAdmin = session.role === "admin";
   return (
     <div className="app-shell workspace-start">
-      <header className="topbar"><div className="topbar-brand"><div className="brand-mark small"><BookOpen size={17} /></div><strong>礼金簿管理</strong><span className="slash">/</span><span className="vault-label">未打开礼金库</span></div><div className="topbar-actions"><span className={`role-badge ${isAdmin ? "admin" : "viewer"}`}>{isAdmin ? "管理员模式" : "用户模式"}</span>{isAdmin && <button className="secondary-button compact" title="修改管理员 PIN" onClick={onChangePin}><KeyRound size={14} />修改 PIN</button>}<button className="secondary-button compact return-start-button" title="返回启动页" onClick={onClose}><ArrowLeft size={15} />返回启动页</button></div></header>
+      <header className="topbar"><div className="topbar-brand"><div className="brand-mark small"><BookOpen size={17} /></div><strong>礼金簿管理</strong><span className="slash">/</span><span className="vault-label">未打开礼金库</span></div><div className="topbar-actions"><span className={`role-badge ${isAdmin ? "admin" : "viewer"}`}>{isAdmin ? "管理员模式" : "用户模式"}</span><button className="secondary-button compact" title="查看软件更新和下载方式" onClick={onOpenSoftwareSettings}><Settings size={14} />软件设置</button>{isAdmin && <button className="secondary-button compact" title="修改管理员 PIN" onClick={onChangePin}><KeyRound size={14} />修改 PIN</button>}<button className="secondary-button compact return-start-button" title="返回启动页" onClick={onClose}><ArrowLeft size={15} />返回启动页</button></div></header>
       <div className="workspace"><aside className="sidebar"><div className="sidebar-heading"><span>礼金簿管理</span></div>{isAdmin ? <button className="sidebar-create" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button> : <button className="sidebar-create" onClick={onUnlock}><Unlock size={16} />解锁管理并新建礼金库</button>}<button className="sidebar-create sidebar-open" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin && <button className="sidebar-create sidebar-import" onClick={onChooseImport}><FileSpreadsheet size={15} />导入表格</button>}<div className="sidebar-bottom"><VersionBadge /></div></aside>
         <main className="content-area"><section className="workspace-empty"><BookOpen size={30} /><h2>尚未打开礼金库</h2><div className="workspace-empty-actions"><button className="primary-button" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin ? <button className="secondary-button" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button> : <button className="secondary-button" onClick={onUnlock}><Unlock size={16} />解锁管理并新建礼金库</button>}</div>
           <section className="vault-onboarding" aria-label="礼金库与礼金簿使用流程"><div className="vault-onboarding-heading"><Info size={16} /><strong>开始使用</strong><span>礼金库包含礼金簿</span></div><div className="vault-onboarding-flow"><article><span className="vault-onboarding-step">1</span><Archive size={18} /><div><strong>新建礼金库</strong><span>例如：王家礼金库</span><small>一个家庭或一份可移动的 .giftvault 文件</small></div></article><ArrowRight className="vault-onboarding-arrow" size={18} /><article><span className="vault-onboarding-step">2</span><BookOpen size={18} /><div><strong>在库内新建礼金簿</strong><span>王伟婚礼礼金、搬新房礼金</span><small>一本礼金簿对应一次办事或一个场景</small></div></article><ArrowRight className="vault-onboarding-arrow" size={18} /><article><span className="vault-onboarding-step">3</span><Gift size={18} /><div><strong>登记礼金</strong><span>来宾、金额、地址、标签与回礼</span><small>记录会保存在对应礼金簿中</small></div></article></div><p>第一次使用：先新建礼金库，再在库内新建礼金簿。已有数据：选择“打开礼金库”并找到原来的 .giftvault 文件。</p></section>
@@ -854,6 +857,17 @@ function WorkspaceStart({ session, pendingSpreadsheetPaths, onClose, onOpenVault
       </div>
     </div>
   );
+}
+
+function NoVaultSoftwareSettings({ updatePhase, updateStatus, lastUpdateCheckAt, onCheckUpdate, onInstallUpdate, onError, onClose }: { updatePhase: LocalUpdatePhase; updateStatus: LocalUpdateStatus | null; lastUpdateCheckAt: string | null; onCheckUpdate: () => void; onInstallUpdate: () => void; onError: (message: string) => void; onClose: () => void }) {
+  const [licenseOpen, setLicenseOpen] = useState(false);
+  const [licenseText, setLicenseText] = useState<string | null>(null);
+  const showLicense = async () => {
+    if (licenseText) { setLicenseOpen((open) => !open); return; }
+    try { setLicenseText(await api.licenseText()); setLicenseOpen(true); } catch (error) { onError(String(error)); }
+  };
+  const checkedAt = lastUpdateCheckAt ? new Date(lastUpdateCheckAt).toLocaleString("zh-CN", { hour12: false }) : "尚未检查";
+  return <Modal title="软件设置 · 关于与更新" className="no-vault-software-settings" onClose={onClose}><AboutSettings updatePhase={updatePhase} updateStatus={updateStatus} checkedAt={checkedAt} updateMessage={updateStatusMessage(updateStatus)} onCheckUpdate={onCheckUpdate} onInstallUpdate={onInstallUpdate} onShowLicense={showLicense} licenseOpen={licenseOpen} licenseText={licenseText} /></Modal>;
 }
 
 function CreateVaultModal({ error, isSaving, vaultName, vaultNotes, onNameChange, onNotesChange, onClose, onCreate }: { error: unknown; isSaving: boolean; vaultName: string; vaultNotes: string; onNameChange: (value: string) => void; onNotesChange: (value: string) => void; onClose: () => void; onCreate: () => void }) {

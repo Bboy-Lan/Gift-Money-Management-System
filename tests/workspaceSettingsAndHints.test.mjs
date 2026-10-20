@@ -143,6 +143,16 @@ test("missing recent vaults are removed and enter the no-vault workspace without
   assert.match(styles, /\.vault-onboarding-step/);
 });
 
+test("the no-vault workspace keeps software update downloads reachable", async () => {
+  const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /const \[softwareSettingsOpen, setSoftwareSettingsOpen\] = useState\(false\)/);
+  assert.match(source, /软件设置/);
+  assert.match(source, /onOpenSoftwareSettings/);
+  assert.match(source, /<NoVaultSoftwareSettings/);
+  assert.match(source, /查看下载方式/);
+});
+
 test("settings includes a donation page with bundled QR images", async () => {
   const [app, styles] = await Promise.all([
     readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
