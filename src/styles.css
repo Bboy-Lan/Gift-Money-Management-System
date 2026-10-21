@@ -1034,6 +1034,10 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 .book-item-close:focus-visible { outline: 2px solid #5a9ab2; outline-offset: 1px; }
 .closed-books-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 5px; padding: 7px 8px; color: #70818a; border: 1px dashed #c7d2d8; background: #fbfcfc; font-size: 11px; cursor: pointer; }
 .closed-books-link:hover { color: #286c68; border-color: #9ec9c2; }
+.closed-books-panel { display: grid; gap: 5px; padding: 6px; border: 1px solid #dbe5e7; border-top: 0; background: #f8fbfb; }
+.closed-book-row { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 4px; color: #60717a; font-size: 11px; }
+.closed-book-row > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.closed-book-row .secondary-button { min-height: 25px; padding: 0 8px; }
 .mapping-field-hint { display: block; color: #87979b; font-size: 10px; font-weight: 400; line-height: 1.3; }
 .confirm-action-modal { width: min(450px, calc(100vw - 40px)); border: 1px solid #b9d4d2; border-top: 4px solid #177f78; border-radius: 10px; box-shadow: 0 24px 70px rgba(21, 45, 51, .30); }
 .confirm-action-modal .modal-heading { margin-bottom: 16px; }

@@ -129,6 +129,18 @@ test("close controls stay outside drag targets and stop pointer propagation", as
   assert.match(app, /function ConfirmVaultClose/);
 });
 
+test("closed gift books expand into an explicit restore list and sidebar accepts wheel scrolling", async () => {
+  const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const entries = app.slice(app.indexOf("function EntriesView"), app.indexOf("function PeopleView"));
+
+  assert.match(app, /onWheel=\{scrollBookList\}/);
+  assert.match(app, /setClosedBooksExpanded\(\(expanded\) => !expanded\)/);
+  assert.match(app, /closed-books-panel/);
+  assert.match(app, /onClick=\{\(\) => restoreClosedBook\(book\)\}/);
+  assert.match(app, /const beginHover = \(\) => setShowClose\(true\)/);
+  assert.doesNotMatch(entries, /编辑礼金库/);
+});
+
 test("sidebar keeps navigation visible while the gift-book list scrolls independently", async () => {
   const [app, styles] = await Promise.all([
     readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),

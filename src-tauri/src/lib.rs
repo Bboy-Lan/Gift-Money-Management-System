@@ -2624,6 +2624,8 @@ fn close_opened_vault_path(state: &AppState, path: &Path) -> Result<(), String> 
         .opened_vault_paths
         .lock()
         .map_err(|_| "礼金库打开状态不可用".to_string())?;
+    // A workspace session is a whole vault, never an individual gift book.
+    // Removing it therefore closes every book that belongs to this vault.
     opened.retain(|item| comparable_path(item) != key);
     if active.as_ref().is_some_and(|item| {
         comparable_path(&item.canonicalize().unwrap_or_else(|_| item.clone())) == key
