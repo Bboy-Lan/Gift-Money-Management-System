@@ -4,7 +4,7 @@ Windows 本地离线礼金管理桌面程序。它把一个家庭的多本礼金
 
 ## 使用方式
 
-1. 从 [GitHub Releases](https://github.com/Bboy-Lan/Gift-Money-Management-System/releases) 下载标准安装包 `Gift-Money-Management-System_0.4.30_x64-setup.exe`（本地名 `礼金簿_0.4.30_x64-setup.exe`，内容相同）。标准版使用系统 WebView2，缺少时需要联网安装运行时；无网络电脑选择 `Gift-Money-Management-System_0.4.30_x64-offline-setup.exe`（本地名 `礼金簿_0.4.30_x64-offline-setup.exe`），其中自带固定运行时。GitHub 附件使用 ASCII 名称，软件名称仍是“礼金簿”。
+1. 从 [GitHub Releases](https://github.com/Bboy-Lan/Gift-Money-Management-System/releases) 下载标准安装包 `Gift-Money-Management-System_0.4.41_x64-setup.exe`（本地名 `礼金簿_0.4.41_x64-setup.exe`，内容相同）。标准版使用系统 WebView2，缺少时安装器会联网安装运行时。GitHub 附件使用 ASCII 名称，软件名称仍是“礼金簿”。
 2. 首次启动会强制设置 6 至 12 位数字的管理员 PIN，并显示一次性恢复码；完成后可进入工作台新建礼金库。
 3. 已有数据可在工作台中打开 `.giftvault` 礼金库；数据保存在用户选择的位置，不依赖程序目录。
 4. 进入管理员模式后可在工作台修改 PIN。删除的礼金簿和记录会进入回收站；重要操作前可使用顶部备份按钮创建副本。
@@ -27,9 +27,9 @@ Excel 是导入导出格式，不是事实数据源。主数据保存在 SQLite 
 
 ## 开发
 
-运行要求：Windows 10/11 x64 与 WebView2。程序清除继承的固定运行时覆盖后，优先检测系统 WebView2；系统缺少时才使用 EXE 同目录或 `resources` 下的完整 `webview2-fixed`。标准安装包通过内嵌小型引导器联网补齐缺少的系统运行时，offline 安装包包含固定版运行时。
+运行要求：Windows 10/11 x64 与 WebView2。程序优先检测系统 WebView2；标准安装包通过内嵌小型引导器联网补齐缺少的系统运行时。
 
-便携使用 `release/<版本>/礼金簿.exe` 时，需要系统 WebView2，或人工提供完整固定运行时。便携模式必须先手动安装一次才能自动更新；标准安装器随后创建指向安装目录的“礼金簿”快捷方式。本地发布成功后，快捷方式助手可把桌面 `礼金簿.lnk` 指向本次便携 EXE；原同名链接先保留在源目录同级的 `礼金簿归档/shortcuts` 中，包括指向已安装程序的旧链接，只移动快捷方式文件。新目标必须位于版本发布目录且未安装、未运行。系统缺少 WebView2 且没有固定运行时时，助手明确要求安装，不创建无法运行的快捷方式。
+`release/<版本>/礼金簿.exe` 供本机构建核验；正常使用请运行标准安装包。标准安装器会创建指向安装目录的“礼金簿”快捷方式。
 
 开发构建要求：Node.js、Rust stable MSVC 和 Visual Studio C++ Build Tools。
 
@@ -56,16 +56,12 @@ PowerShell 脚本策略可能阻止 `npm.ps1`，项目统一使用 `npm.cmd`。�
 - GitHub 无法访问时，可使用 [蓝奏云](https://wwaxt.lanzouu.com/ifcV14c5cnre) 或 [百度网盘](https://pan.baidu.com/s/1aTT_M2aBvope8K-fhYB0Tg?pwd=Niko)，两者公开提取码均为 `Niko`。先保存并退出礼金簿，再运行安装包，保留 `.giftvault` 礼金库。分享内文件版本未经本次验证，请核对版本号。
 - `update-channels.json` 集中配置公开链接、提取码、GitHub 更新清单和签名公钥。维护者需要人工更新网盘文件；发布 GitHub Release 不会自动上传网盘。分享页不是自动更新接口，不向网盘发送礼金库或账号信息。
 - 新版本仍保留独立的应用标识和本机设置目录，不自动迁移旧版PIN或设置；已有礼金库可由用户手动打开。
-- 发布前同步版本文件与 CHANGELOG；`npm.cmd run release:local` 执行完整验证一次、编译 EXE 一次，再分别打包标准版与 offline 版。两套安装包和签名在下一次打包覆盖 NSIS 输出前保留，校验签名及签名版本后写入 `release/<版本>/`；不会重复复制完整固定运行时目录。命令不运行安装器，交付完成后调用快捷方式助手。程序内更新明细在构建时从 CHANGELOG 生成。
+- 发布前同步版本文件与 CHANGELOG；`npm.cmd run release:local` 执行完整验证一次、编译 EXE 一次，只打包标准安装包及其签名，并写入 `release/<版本>/`。发布命令不运行安装器；程序内更新明细在构建时从 CHANGELOG 生成。
 - 构建者需妥善离线备份 `.local-signing/lijinbook.key`，该目录禁止提交或上传。首次可运行 `node scripts/ensure-update-signing.mjs`；以后必须使用同一私钥签名。更换密钥会使已安装客户端拒绝更新。
-- GitHub 发布须附带标准版与 offline 版安装包、各自 `.sig`、`latest.json`、更新说明与两套产物的 SHA256 清单。`latest.json` 只指向标准安装包，保持 0.4.28 客户端更新协议与签名通道兼容；offline 版供手动下载备用。更新签名不是 Windows Authenticode 证书，SmartScreen 可能仍提示未知发布者。
+- GitHub 发布只附带标准安装包、其 `.sig`、`latest.json`、更新说明、哈希与 README。`latest.json` 指向标准安装包；更新签名不是 Windows Authenticode 证书，SmartScreen 可能仍提示未知发布者。
 - 发布流程：先运行 `npm.cmd run release:local`，再运行 `node scripts/publish-github.mjs` 仅验证成品；确认测试和附件后提交源码，正常推送main及指向该提交的annotated版本tag。明确获准发布后运行 `node scripts/publish-github.mjs --publish`，脚本先上传草稿、核验签名版本/附件摘要，再公开Release；不会强推或覆盖已公开版本。
 
-若构建、打包或签名校验失败，不产生版本发布目录；若仅最后一步快捷方式交付失败，命令报错并保留已验证的版本目录，输出可直接复制的助手重试命令。解决运行时或路径问题后只重跑该命令，不必重建，也不要为此删除版本目录。例如在项目根目录运行：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./scripts/create-shortcut.ps1 -Root (Get-Location).Path -Executable ((Get-Location).Path + '/release/0.4.30/礼金簿.exe')
-```
+若构建、打包或签名校验失败，不产生版本发布目录；不要删除已有版本目录或覆盖同版本产物。
 
 ## 关于与发布
 

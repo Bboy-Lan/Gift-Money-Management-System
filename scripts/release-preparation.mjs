@@ -57,7 +57,7 @@ async function publishStaging(staging, destination) {
   }
 }
 
-export async function prepareRelease(root, version, notes, installerDirectory, includeOffline = true) {
+export async function prepareRelease(root, version, notes, installerDirectory, includeOffline = false) {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error("Invalid version");
   const paths = releasePaths(root, version);
   await assertBoundDirectory(paths.root, paths.target);

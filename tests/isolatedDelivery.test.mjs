@@ -7,7 +7,7 @@ import { assertBoundDirectory, isolatedBuildEnv, prepareRelease, releasePaths } 
 const root = resolve(import.meta.dirname, "..");
 await mkdir(join(root, "src-tauri/target"), { recursive: true });
 
-test("isolated delivery versions, identity, offline policy and CSP", async () => {
+test("isolated delivery versions, identity, standard release policy and CSP", async () => {
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const config = JSON.parse(await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"));
   const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
@@ -66,7 +66,7 @@ test("release paths and build environment ignore inherited redirection", () => {
   }
 });
 
-test("safe preparation preserves both signed installers without loose runtime, refuses repeated version", async () => {
+test("safe preparation emits only the standard signed installer by default, refuses repeated version", async () => {
   const fixture = await mkdtemp(join(root, "src-tauri/target/delivery-test-"));
   try {
     const built = join(fixture, "src-tauri/target/release");
@@ -83,21 +83,12 @@ test("safe preparation preserves both signed installers without loose runtime, r
     await writeFile(join(fixture, "update-channels.json"), JSON.stringify({ publicKey: key }));
     const signature = signing("installer");
     await writeFile(join(built, "bundle/nsis/礼金簿_0.4.27_x64-setup.exe.sig"), signature);
-    await writeFile(join(built, "bundle/nsis/礼金簿_0.4.27_x64-offline-setup.exe"), "offline installer");
-    await writeFile(join(built, "bundle/nsis/礼金簿_0.4.27_x64-offline-setup.exe.sig"), signing("offline installer"));
-    const offlinePath = join(built, "bundle/nsis/礼金簿_0.4.27_x64-offline-setup.exe");
-    await rm(offlinePath);
-    await assert.rejects(prepareRelease(fixture, "0.4.27", "notes"), /ENOENT/);
-    await writeFile(offlinePath, "corrupted");
-    await assert.rejects(prepareRelease(fixture, "0.4.27", "notes"), /signature/i);
-    assert.ok(!(await readdir(fixture)).includes("release"));
-    await writeFile(offlinePath, "offline installer");
     const result = await prepareRelease(fixture, "0.4.27", "notes");
     assert.ok(!(await readdir(result)).includes("webview2-fixed"));
-    assert.equal(await readFile(join(result, "礼金簿_0.4.27_x64-offline-setup.exe"), "utf8"), "offline installer");
+    assert.ok(!(await readdir(result)).some(name => name.includes("offline")));
     const hashes = await readFile(join(result, "SHA256SUMS.txt"), "utf8");
     assert.ok(hashes.includes(createHash("sha256").update("installer").digest("hex").toUpperCase()));
-    assert.ok(hashes.includes(createHash("sha256").update("offline installer").digest("hex").toUpperCase() + "  Gift-Money-Management-System_0.4.27_x64-offline-setup.exe"));
+    assert.ok(!hashes.includes("offline"));
     const manifest = JSON.parse(await readFile(join(result, "latest.json"), "utf8"));
     assert.equal(manifest.platforms["lijinbook-remediation-windows-x86_64"].signature, signature);
     assert.equal(manifest.platforms["lijinbook-remediation-windows-x86_64"].url, "https://github.com/Bboy-Lan/Gift-Money-Management-System/releases/download/v0.4.27/Gift-Money-Management-System_0.4.27_x64-setup.exe");

@@ -30,9 +30,12 @@ test("two bundle modes preserve distinct installer signatures before NSIS overwr
 
 test("standard release rebuilds and verifies the versioned executable before bundling", async () => {
   const source = await readFile(new URL("../scripts/release-standard.mjs", import.meta.url), "utf8");
+  const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 
   assert.match(source, /buildStandardInstaller/);
   assert.match(source, /assertWindowsExecutableVersion/);
+  assert.match(source, /scripts\/verify\.mjs/);
+  assert.equal(pkg.scripts["release:local"], "node scripts/release-standard.mjs");
 });
 
 test("NSIS installs outside the desktop and refreshes one fixed desktop shortcut", async () => {

@@ -18,7 +18,5 @@ jobs:
         run: cargo fetch --locked --manifest-path src-tauri/Cargo.toml
       - name: Offline quality gate
         run: npm.cmd run verify
-      # No upload or GitHub Release step. Offline user installers require an
-      # explicitly pre-provisioned fixed WebView2 runtime and release:local.
-      # Standard uses the configured online bootstrapper; offline uses the overlay.
-      # Both retain this product's own asset names. No automatic upload.
+      # No upload or GitHub Release step. Local releases use the standard
+      # installer with the configured online WebView2 bootstrapper only.

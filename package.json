@@ -12,7 +12,7 @@
     "test:recent-vaults": "node --test tests/recentVaults.test.mjs",
     "preview": "vite preview",
     "tauri": "tauri",
-    "release:local": "node scripts/release-local.mjs",
+    "release:local": "node scripts/release-standard.mjs",
     "release:standard": "node scripts/release-standard.mjs"
   },
   "dependencies": {

@@ -5,23 +5,21 @@ import { readFile, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { repository, releaseInstallerName, localInstallerName, verifyUpdateSignature } from "./update-manifest.mjs";
+import { repository, releaseInstallerName, verifyUpdateSignature } from "./update-manifest.mjs";
 import { assertBoundDirectory } from "./release-preparation.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const { version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const directory = join(root, "release", version);
 const installer = `礼金簿_${version}_x64-setup.exe`;
-const offlineInstaller = localInstallerName(version, true);
-const standardOnly = process.argv.includes("--standard-only");
-const filenames = [installer, installer + ".sig", ...(standardOnly ? [] : [offlineInstaller, offlineInstaller + ".sig"]), "latest.json", "RELEASE_NOTES.md", "SHA256SUMS.txt", "README.md"];
+const filenames = [installer, installer + ".sig", "latest.json", "RELEASE_NOTES.md", "SHA256SUMS.txt", "README.md"];
 const assets = [];
 for (const name of filenames) {
   const path = join(directory, name);
   await assertBoundDirectory(root, path);
   const bytes = await readFile(path);
-  const sourceName = [installer, offlineInstaller].find(candidate => name === candidate || name === candidate + ".sig");
-  const uploadName = sourceName ? releaseInstallerName(version, sourceName === offlineInstaller) + name.slice(sourceName.length) : name;
+  const sourceName = name === installer || name === installer + ".sig" ? installer : undefined;
+  const uploadName = sourceName ? releaseInstallerName(version) + name.slice(sourceName.length) : name;
   assets.push({ name: uploadName, path, size: bytes.length, digest: "sha256:" + createHash("sha256").update(bytes).digest("hex") });
 }
 const manifest = JSON.parse(await readFile(join(directory, "latest.json"), "utf8"));
@@ -29,7 +27,6 @@ if (manifest.version !== version || manifest.productId !== "com.codex.lijinbook.
 const platform = manifest.platforms["lijinbook-remediation-windows-x86_64"];
 const channels = JSON.parse(await readFile(join(root, "update-channels.json"), "utf8"));
 verifyUpdateSignature(await readFile(join(directory, installer)), platform.signature, channels.publicKey, version);
-if (!standardOnly) verifyUpdateSignature(await readFile(join(directory, offlineInstaller)), (await readFile(join(directory, offlineInstaller + ".sig"), "utf8")).trim(), channels.publicKey, version);
 if (platform.signature !== (await readFile(join(directory, installer + ".sig"), "utf8")).trim()
   || platform.url !== `https://github.com/${repository}/releases/download/v${version}/${releaseInstallerName(version)}`) throw new Error("Manifest asset mismatch");
 function git(args, input) {

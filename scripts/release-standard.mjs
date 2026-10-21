@@ -42,6 +42,7 @@ function assertWindowsExecutableVersion(executable, expectedVersion) {
   const actualVersion = result.stdout.trim();
   if (actualVersion !== expectedVersion) throw new Error(`Built executable version ${actualVersion || "missing"} does not match ${expectedVersion}`);
 }
+run(process.execPath, [join(root, "scripts/verify.mjs")]);
 const executable = await buildStandardInstaller(root, version, args => run(process.execPath, [join(root, "node_modules/@tauri-apps/cli/tauri.js"), ...args]));
 assertWindowsExecutableVersion(executable, version);
 const destination = await prepareRelease(root, version, notes, undefined, false);
