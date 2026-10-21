@@ -1052,6 +1052,12 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 }
 .people-main { flex: 1 1 auto; }
 .file-info-notes { color: #62747b; line-height: 1.5; overflow-wrap: anywhere; }
+
+/* 随礼明细与礼金明细使用同一套普通表格行为：姓名列不固定。 */
+.outbound-gifts-view .table-panel-heading strong { font-size: 0; }
+.outbound-gifts-view .table-panel-heading strong::after { content: "随礼明细"; font-size: 1rem; }
+.outbound-gifts-view th:first-child,
+.outbound-gifts-view td:first-child { position: static; left: auto; }
 .book-item-row { display: flex; align-items: stretch; min-width: 0; border: 1px solid transparent; border-radius: 4px; touch-action: none; }
 .book-item-row:hover { background: #f4f7f9; }
 .book-item-row.dragging { cursor: grabbing; opacity: .56; }
