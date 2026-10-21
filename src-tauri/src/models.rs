@@ -75,6 +75,8 @@ pub struct OutboundGift {
     pub person_name: String,
     pub amount_fen: i64,
     pub given_at: String,
+    pub address: Option<String>,
+    pub payment_method: String,
     pub note: Option<String>,
     pub tags: Vec<String>,
     pub tag_names: Vec<String>,
@@ -450,6 +452,8 @@ pub struct OutboundGiftInput {
     pub person_name: String,
     pub amount_fen: i64,
     pub given_at: String,
+    pub address: String,
+    pub payment_method: String,
     pub note: String,
     pub tag_ids: Vec<String>,
 }

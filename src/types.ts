@@ -140,6 +140,8 @@ export interface OutboundGift {
   personName: string;
   amountFen: number;
   givenAt: string;
+  address: string | null;
+  paymentMethod: string;
   note: string | null;
   tags: string[];
   tagNames: string[];

@@ -62,8 +62,8 @@ function createApi(invoke: typeof import("@tauri-apps/api/core").invoke) { retur
   listReturnGifts: () => invoke<ReturnGiftRecord[]>("list_return_gifts"),
   listOutboundGifts: () => invoke<OutboundGift[]>("list_outbound_gifts"),
   outboundGiftSummary: () => invoke<OutboundGiftSummary>("outbound_gift_summary"),
-  createOutboundGift: (input: { personName: string; amountFen: number; givenAt: string; note: string; tagIds: string[] }) => invoke<OutboundGift>("create_outbound_gift", { input }),
-  updateOutboundGift: (id: string, input: { personName: string; amountFen: number; givenAt: string; note: string; tagIds: string[] }) => invoke<OutboundGift>("update_outbound_gift", { id, input }),
+  createOutboundGift: (input: { personName: string; amountFen: number; givenAt: string; address: string; paymentMethod: string; note: string; tagIds: string[] }) => invoke<OutboundGift>("create_outbound_gift", { input }),
+  updateOutboundGift: (id: string, input: { personName: string; amountFen: number; givenAt: string; address: string; paymentMethod: string; note: string; tagIds: string[] }) => invoke<OutboundGift>("update_outbound_gift", { id, input }),
   deleteOutboundGift: (id: string) => invoke<void>("delete_outbound_gift", { id }),
   searchVault: (query: string, vaultPaths: string[]) => invoke<SearchResponse>("search_vault", { query, vaultPaths }),
   createEntry: (input: {

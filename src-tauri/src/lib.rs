@@ -25,7 +25,7 @@ mod update_security;
 use app_security::{validate_pin, AppSecurityStore};
 use models::*;
 
-const CURRENT_SCHEMA: i32 = 9;
+const CURRENT_SCHEMA: i32 = 10;
 
 static WRITE_OPERATION: Mutex<()> = Mutex::new(());
 
@@ -630,6 +630,21 @@ fn migrate(connection: &Connection) -> Result<(), String> {
              CREATE INDEX IF NOT EXISTS idx_outbound_gifts_active ON outbound_gifts(deleted_at, given_at);
              PRAGMA user_version = 9;",
         ).map_err(|e| e.to_string())?;
+    }
+    if version < 10 {
+        if !table_has_column(connection, "outbound_gifts", "address")? {
+            connection
+                .execute_batch("ALTER TABLE outbound_gifts ADD COLUMN address TEXT;")
+                .map_err(|e| e.to_string())?;
+        }
+        if !table_has_column(connection, "outbound_gifts", "payment_method")? {
+            connection
+                .execute_batch("ALTER TABLE outbound_gifts ADD COLUMN payment_method TEXT NOT NULL DEFAULT '现金';")
+                .map_err(|e| e.to_string())?;
+        }
+        connection
+            .execute_batch("PRAGMA user_version = 10;")
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -5422,7 +5437,7 @@ fn list_outbound_gifts_from_connection(
     connection: &Connection,
 ) -> Result<Vec<OutboundGift>, String> {
     let mut statement = connection.prepare(
-        "SELECT id, person_name, amount_fen, given_at, note, tag_snapshot FROM outbound_gifts WHERE deleted_at IS NULL ORDER BY given_at DESC, updated_at DESC"
+        "SELECT id, person_name, amount_fen, given_at, address, payment_method, note, tag_snapshot FROM outbound_gifts WHERE deleted_at IS NULL ORDER BY given_at DESC, updated_at DESC"
     ).map_err(|e| e.to_string())?;
     let rows = statement
         .query_map([], |row| {
@@ -5433,11 +5448,13 @@ fn list_outbound_gifts_from_connection(
                 row.get::<_, String>(3)?,
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(7)?,
             ))
         })
         .map_err(|e| e.to_string())?;
     rows.map(|row| {
-        let (id, person_name, amount_fen, given_at, note, tag_snapshot) =
+        let (id, person_name, amount_fen, given_at, address, payment_method, note, tag_snapshot) =
             row.map_err(|e| e.to_string())?;
         let (tags, tag_names) = outbound_tag_names(connection, &tag_snapshot);
         Ok(OutboundGift {
@@ -5445,6 +5462,8 @@ fn list_outbound_gifts_from_connection(
             person_name,
             amount_fen,
             given_at,
+            address,
+            payment_method,
             note,
             tags,
             tag_names,
@@ -5496,6 +5515,8 @@ fn save_outbound_gift(
     }
     validate_amount(input.amount_fen)?;
     validate_date(&input.given_at, false)?;
+    validate_text("地址", &input.address, 4096)?;
+    validate_text("支付方式", &input.payment_method, 256)?;
     validate_text("备注", &input.note, 65536)?;
     let mut connection = admin_connection(state, &vault_path, "save-outbound-gift", false)?;
     let transaction = connection.transaction().map_err(|e| e.to_string())?;
@@ -5511,7 +5532,7 @@ fn save_outbound_gift(
         .map_err(|e| e.to_string())?
         == 0
     {
-        transaction.execute("INSERT INTO outbound_gifts(id, person_name, amount_fen, given_at, note, tag_snapshot, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", params![gift_id, input.person_name.trim(), input.amount_fen, input.given_at, null_if_empty(&input.note), tag_snapshot, now_value, now_value]).map_err(|e| e.to_string())?;
+        transaction.execute("INSERT INTO outbound_gifts(id, person_name, amount_fen, given_at, address, payment_method, note, tag_snapshot, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", params![gift_id, input.person_name.trim(), input.amount_fen, input.given_at, null_if_empty(&input.address), input.payment_method.trim(), null_if_empty(&input.note), tag_snapshot, now_value, now_value]).map_err(|e| e.to_string())?;
         write_audit_detail(
             &transaction,
             "create",
@@ -5526,7 +5547,7 @@ fn save_outbound_gift(
             },
         )?;
     } else {
-        let changed = transaction.execute("UPDATE outbound_gifts SET person_name=?, amount_fen=?, given_at=?, note=?, tag_snapshot=?, updated_at=? WHERE id=? AND deleted_at IS NULL", params![input.person_name.trim(), input.amount_fen, input.given_at, null_if_empty(&input.note), tag_snapshot, now_value, gift_id]).map_err(|e| e.to_string())?;
+        let changed = transaction.execute("UPDATE outbound_gifts SET person_name=?, amount_fen=?, given_at=?, address=?, payment_method=?, note=?, tag_snapshot=?, updated_at=? WHERE id=? AND deleted_at IS NULL", params![input.person_name.trim(), input.amount_fen, input.given_at, null_if_empty(&input.address), input.payment_method.trim(), null_if_empty(&input.note), tag_snapshot, now_value, gift_id]).map_err(|e| e.to_string())?;
         if changed == 0 {
             return Err("随礼记录不存在或已删除".into());
         }
@@ -5554,6 +5575,8 @@ fn save_outbound_gift(
         person_name: input.person_name.trim().into(),
         amount_fen: input.amount_fen,
         given_at: input.given_at,
+        address: null_if_empty(&input.address),
+        payment_method: input.payment_method.trim().into(),
         note: null_if_empty(&input.note),
         tags,
         tag_names,
@@ -9418,6 +9441,12 @@ mod tests {
         assert!(
             table_has_column(&connection, "gift_books", "source_imported_at")
                 .expect("source time column")
+        );
+        assert!(table_has_column(&connection, "outbound_gifts", "address")
+            .expect("outbound address column"));
+        assert!(
+            table_has_column(&connection, "outbound_gifts", "payment_method")
+                .expect("outbound payment column")
         );
         assert!(table_has_column(&connection, "gift_entries", "return_gift")
             .expect("return gift column"));
