@@ -86,3 +86,19 @@ export function forgetRecentVault(recent: Pick<RecentVault, "path" | "bookId">, 
   }
   return next;
 }
+
+export function replaceRecentVaultPath(previousPath: string, nextPath: string, storage?: Storage): RecentVault[] {
+  const target = getStorage(storage);
+  const previousKey = previousPath.trim().replaceAll("/", "\\").toLocaleLowerCase();
+  const next = readRecentVaults(target ?? undefined).map((item) => (
+    item.path.trim().replaceAll("/", "\\").toLocaleLowerCase() === previousKey
+      ? { ...item, path: nextPath }
+      : item
+  ));
+  try {
+    target?.setItem(STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Local history is optional; moving the vault itself remains authoritative.
+  }
+  return next;
+}

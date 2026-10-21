@@ -37,7 +37,7 @@ test("stale recent book ids fall back to the first book in the opened vault", as
   assert.equal(resolveInitialBookId("missing-book", []), null);
 });
 
-test("startup recovery skips a failed older record and opens the next valid record", async () => {
+test("startup recovery does not fall back to an older record after the latest path fails", async () => {
   const { openRecentVaults } = await loadWorkspaceLaunch();
   const first = { path: "D:/old/family.giftvault", name: "旧路径", bookId: "old-book" };
   const second = { path: "D:/current/family.giftvault", name: "当前礼金库", bookId: "current-book" };
@@ -48,9 +48,9 @@ test("startup recovery skips a failed older record and opens the next valid reco
     return { vault: { path, name: second.name, bookCount: 1 }, role: "viewer" };
   });
 
-  assert.equal(opened.status, "opened");
-  assert.equal(opened.recent, second);
-  assert.deepEqual(attempted, [first.path, second.path]);
+  assert.equal(opened.status, "failed");
+  assert.equal(opened.recent, first);
+  assert.deepEqual(attempted, [first.path]);
 });
 
 test("admin entry with no recent records opens the workspace start page", async () => {

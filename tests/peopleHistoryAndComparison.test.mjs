@@ -33,6 +33,7 @@ test("comparison details are source-book bound and keep only source entry tables
   assert.match(source, /historyError/);
   assert.doesNotMatch(source, /comparisonSourceDetails/);
   assert.doesNotMatch(source, /comparison-profile-facts/);
+  assert.match(types, /interface ComparisonPersonRef[\s\S]*?bookId: string/);
   assert.match(types, /interface ComparisonPersonHistory/);
 });
 

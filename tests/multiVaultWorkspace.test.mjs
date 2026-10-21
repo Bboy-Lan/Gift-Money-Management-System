@@ -63,14 +63,14 @@ test("comparison defaults to the active vault and adds historical sources only w
   assert.match(source, /if \(!selected\.length\) return/);
 });
 
-test("desktop product uses the 礼金簿管理 executable and installer names", async () => {
+test("desktop product uses the standard 礼金簿 executable and installer names", async () => {
   const config = await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8");
   const release = await readFile(new URL("../scripts/release-local.mjs", import.meta.url), "utf8");
 
-  assert.match(config, /"productName": "礼金簿管理"/);
-  assert.match(config, /"mainBinaryName": "礼金簿管理"/);
-  assert.match(release, /const executableName = "礼金簿管理\.exe"/);
-  assert.match(release, /礼金簿管理_\$\{version\}_x64-setup\.exe/);
+  assert.match(config, /"productName": "礼金簿"/);
+  assert.match(config, /"mainBinaryName": "礼金簿"/);
+  assert.match(release, /const executableName = "礼金簿\.exe"/);
+  assert.match(release, /礼金簿_\$\{version\}_x64-setup\.exe/);
 });
 
 test("gift-book editing is independent from vault editing and preserves source metadata", async () => {
@@ -80,7 +80,7 @@ test("gift-book editing is independent from vault editing and preserves source m
 
   assert.match(app, /编辑礼金库/);
   assert.match(app, /编辑礼金簿/);
-  assert.match(app, /<BookMetadata book=\{activeBook\} vaultPath=\{vault\.path\} \/>/);
+  assert.match(app, /<BookMetadata book=\{activeBook\} \/>/);
   assert.match(api, /editBook: \(bookId: string, input:/);
   assert.match(api, /invoke<GiftBook>\("edit_book"/);
   assert.match(rust, /fn edit_book\(/);
@@ -111,9 +111,10 @@ test("batch spreadsheet import requires an explicit existing-book or new-book ta
 
   assert.match(source, /targetBookId/);
   assert.match(source, /明确新建礼金簿/);
-  assert.match(source, /books=\{books\.data \?\? \[\]\}/);
+  assert.match(source, /books=\{openedVaultBooks\.data \?\? \[\]\}/);
   assert.match(apiSource, /targetBookId\?: string \| null/);
   assert.match(modelSource, /pub target_book_id: Option<String>/);
+  assert.match(modelSource, /pub target_vault_path: Option<String>/);
   assert.match(modelSource, /pub create_new_book: bool/);
   assert.match(rustSource, /validate_spreadsheet_target/);
   assert.match(rustSource, /目标礼金簿不存在或已被删除/);
@@ -127,7 +128,7 @@ test("vault metadata editing and complete export use vault-level commands", asyn
 
   assert.match(models, /pub notes: Option<String>/);
   assert.match(app, /编辑礼金库/);
-  assert.match(app, /api\.editVault\(name, notes\)/);
+  assert.match(app, /api\.editVault\(name, notes, path\)/);
   assert.match(app, /api\.exportVault\(\)/);
   assert.match(app, /<Archive size=\{15\} \/>导出库/);
   assert.doesNotMatch(app, /onClick=\{\(\) => entries\.refetch\(\)\}><RefreshCw/);

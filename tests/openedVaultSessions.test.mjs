@@ -57,3 +57,17 @@ test("invalid saved session data is ignored without preventing startup", async (
     { path: "D:/有效.giftvault", activeBookId: null, activeTab: "entries" },
   ]);
 });
+
+test("moving an opened vault keeps its saved workspace selection", async () => {
+  const { rememberOpenedVaultSessions, replaceOpenedVaultSessionPath } = await loadSessions();
+  const storage = memoryStorage();
+  rememberOpenedVaultSessions([
+    { path: "D:/old/family.giftvault", activeBookId: "book-a", activeTab: "people" },
+    { path: "D:/other.giftvault", activeBookId: null, activeTab: "entries" },
+  ], "D:/old/family.giftvault", storage);
+
+  const next = replaceOpenedVaultSessionPath("D:/old/family.giftvault", "E:/new/family.giftvault", storage);
+
+  assert.deepEqual(next[0], { path: "E:/new/family.giftvault", activeBookId: "book-a", activeTab: "people" });
+  assert.equal(next[1].path, "D:/other.giftvault");
+});

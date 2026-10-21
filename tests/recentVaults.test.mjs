@@ -50,3 +50,18 @@ test("recent book identity distinguishes books sharing a vault path", async () =
     recentVaultIdentity({ path: "D:/family.giftvault", name: "B", bookId: "book-b" }),
   );
 });
+
+test("moving a vault rewrites every recent entry without losing its selected book", async () => {
+  const { replaceRecentVaultPath } = await loadRecentVaults();
+  const storage = new MemoryStorage();
+  storage.setItem("lijin-book.recent-vaults", JSON.stringify([
+    { path: "D:/old/family.giftvault", name: "春节", bookId: "book-a", bookTitle: "春节" },
+    { path: "D:/other.giftvault", name: "其他" },
+  ]));
+
+  const next = replaceRecentVaultPath("D:/old/family.giftvault", "E:/new/family.giftvault", storage);
+
+  assert.equal(next[0].path, "E:/new/family.giftvault");
+  assert.equal(next[0].bookId, "book-a");
+  assert.equal(next[1].path, "D:/other.giftvault");
+});
