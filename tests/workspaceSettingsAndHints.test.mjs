@@ -153,13 +153,14 @@ test("sidebar keeps navigation visible while the gift-book list scrolls independ
   assert.match(styles, /\.sidebar-bottom \{[^}]*flex: 0 0 auto/);
 });
 
-test("book summary shows activity and notes instead of creation time or vault path", async () => {
+test("book summary shows compact activity values instead of creation time or vault path", async () => {
   const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
   const metadata = app.slice(app.indexOf("function BookMetadata"), app.indexOf("function isRestorableAuditRecord"));
 
-  assert.match(metadata, /活动类型：/);
-  assert.match(metadata, /活动时间：/);
-  assert.match(metadata, /备注：\{book\.notes\?\.trim\(\) \|\| "未填写"\}/);
+  assert.match(metadata, /book\.occasion \|\| "无"/);
+  assert.match(metadata, /book\.eventDate \?\? "无"/);
+  assert.match(metadata, /book\.notes\?\.trim\(\) \|\| "无"/);
+  assert.doesNotMatch(metadata, /活动类型：|活动时间：|备注：/);
   assert.doesNotMatch(metadata, /创建时间/);
   assert.doesNotMatch(metadata, /礼金库路径/);
 });

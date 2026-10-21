@@ -2091,6 +2091,7 @@ fn materialize_comparison_spreadsheet(path: &Path) -> Result<String, String> {
         let mut connection = Connection::open(&destination).map_err(|error| error.to_string())?;
         migrate(&connection)?;
         let timestamp = now();
+        let event_date = Local::now().date_naive().to_string();
         connection
             .execute(
                 "INSERT OR REPLACE INTO vault_meta(key, value) VALUES ('name', ?), ('comparison_source_path', ?)",
@@ -2104,8 +2105,8 @@ fn materialize_comparison_spreadsheet(path: &Path) -> Result<String, String> {
             .map_err(|error| error.to_string())?;
         transaction
             .execute(
-                "INSERT INTO gift_books(id, title, occasion, created_at, updated_at, source_file_name, source_file_path, source_imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                params![book_id, title, "导入表格", timestamp, timestamp, sheet.file_name, source_path_text, timestamp],
+                "INSERT INTO gift_books(id, title, occasion, event_date, created_at, updated_at, source_file_name, source_file_path, source_imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![book_id, title, "导入表格", event_date, timestamp, timestamp, sheet.file_name, source_path_text, timestamp],
             )
             .map_err(|error| error.to_string())?;
         import_sheet_into_transaction(&transaction, &sheet, &analysis, &book_id, &mut catalog)?;
@@ -4633,15 +4634,15 @@ fn import_spreadsheets(
             let book_id = Uuid::new_v4().to_string();
             transaction
             .execute(
-                "INSERT INTO gift_books(id, title, occasion, created_at, updated_at, source_file_name, source_file_path, source_imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                params![book_id, title, "导入表格", timestamp, timestamp, source_file_name, source_file_path, timestamp],
+                "INSERT INTO gift_books(id, title, occasion, event_date, created_at, updated_at, source_file_name, source_file_path, source_imported_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![book_id, title, "导入表格", Local::now().date_naive().to_string(), timestamp, timestamp, source_file_name, source_file_path, timestamp],
             )
             .map_err(|e| e.to_string())?;
             let book = GiftBook {
                 id: book_id.clone(),
                 title: title.clone(),
                 occasion: "导入表格".to_string(),
-                event_date: None,
+                event_date: Some(Local::now().date_naive().to_string()),
                 location: None,
                 notes: None,
                 created_at: timestamp.clone(),
