@@ -617,13 +617,23 @@ button:disabled { cursor: not-allowed; opacity: .52; }
 .metric-card, .metric-card.green, .metric-card.amber { border-left-color: #e2eaeb; }
 .metric-card strong { color: #25343c; font-size: 22px; }
 .summary-strip { position: relative; }
-.summary-collapse { position: absolute; right: 8px; top: 8px; }
+.summary-toggle { cursor: pointer; }
+.summary-toggle:focus-visible { outline: 2px solid #1b8b82; outline-offset: 2px; }
+.summary-toggle:hover { border-color: #8fc7c0; }
 .summary-strip.summary-collapsed { display: block; padding: 0; min-height: 0; }
-.summary-expand { width: 100%; padding: 10px 14px; color: #356562; background: #f3faf8; border: 0; text-align: left; font-size: 12px; }
+.summary-expand { display: block; width: 100%; padding: 10px 14px; color: #356562; background: #f3faf8; text-align: left; font-size: 12px; }
 .draggable-column-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 0; list-style: none; }
 .draggable-column-list li { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 0 12px; border: 1px solid #d5e0e2; background: #fff; cursor: grab; user-select: none; }
 .draggable-column-list li.dragging { opacity: .45; border-style: dashed; cursor: grabbing; }
 .draggable-column-list small { color: #84929f; font-size: 11px; }
+.draggable-column-list li { touch-action: none; }
+.export-confirm-modal { width: min(860px, calc(100vw - 42px)); }
+.export-column-order { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 14px; }
+.export-column-order span { padding: 4px 7px; border: 1px solid #d5e0e2; border-radius: 3px; color: #49616a; font-size: 12px; }
+.export-preview-heading { display: block; margin-bottom: 7px; }
+.export-preview-table { overflow: auto; max-height: 180px; border: 1px solid #dce5e7; }
+.export-preview-table table { min-width: max-content; }
+.export-preview-table th, .export-preview-table td { white-space: nowrap; padding: 7px 9px; font-size: 12px; }
 .metric-card small { margin-top: 4px; color: #829096; font-size: 11px; }
 .toolbar { min-height: 36px; }
 .table-panel, .history-panel, .tag-panel { border-color: #d5e0e2; border-radius: 5px; box-shadow: none; }
