@@ -2249,7 +2249,7 @@ dependencies = [
 
 [[package]]
 name = "lijin-book"
-version = "0.4.40"
+version = "0.4.41"
 dependencies = [
  "argon2",
  "calamine",

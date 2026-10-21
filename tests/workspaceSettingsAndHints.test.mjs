@@ -107,6 +107,69 @@ test("opened vault tabs can close one session without deleting its source file",
   assert.match(app, /onMouseLeave={endHover}/);
 });
 
+test("editing starts unlocked after PIN verification while the user can lock it again", async () => {
+  const [app, rust] = await Promise.all([
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(rust, /fn set_admin_session[\s\S]*session\.edit_locked = false/);
+  assert.match(app, /\{session\.editLocked \? "解锁编辑" : "锁定编辑"\}/);
+});
+
+test("close controls stay outside drag targets and stop pointer propagation", async () => {
+  const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const tabs = app.slice(app.indexOf("function OpenedVaultTab"), app.indexOf("function BookListItem"));
+  const books = app.slice(app.indexOf("function BookListItem"), app.indexOf("function VaultMetadataModal"));
+
+  assert.match(tabs, /className="opened-vault-tab-select"[\s\S]*onPointerDown=\{startDrag\}/);
+  assert.match(tabs, /opened-vault-tab-close[\s\S]*onPointerUp=\{\(event\) => event\.stopPropagation\(\)\}/);
+  assert.match(books, /className=\{`book-item \$\{active \? "active" : ""\}`\}[\s\S]*onPointerDown=\{onPointerDown\}/);
+  assert.match(books, /book-item-close[\s\S]*onPointerUp=\{\(event\) => event\.stopPropagation\(\)\}/);
+  assert.match(app, /function ConfirmVaultClose/);
+});
+
+test("sidebar keeps navigation visible while the gift-book list scrolls independently", async () => {
+  const [app, styles] = await Promise.all([
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/styles.css", import.meta.url), "utf8"),
+  ]);
+
+  const workspace = app.slice(app.indexOf("function VaultWorkspace"), app.indexOf("function SettingsView"));
+  assert.doesNotMatch(workspace, /<div className="sidebar-heading"><span>礼金簿管理<\/span><\/div>/);
+  assert.match(styles, /\.book-list \{[^}]*flex: 1 1 auto[^}]*overflow-y: auto/);
+  assert.match(styles, /\.sidebar-bottom \{[^}]*flex: 0 0 auto/);
+});
+
+test("book summary shows activity and notes instead of creation time or vault path", async () => {
+  const app = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
+  const metadata = app.slice(app.indexOf("function BookMetadata"), app.indexOf("function isRestorableAuditRecord"));
+
+  assert.match(metadata, /活动类型：/);
+  assert.match(metadata, /活动时间：/);
+  assert.match(metadata, /备注：\{book\.notes\?\.trim\(\) \|\| "未填写"\}/);
+  assert.doesNotMatch(metadata, /创建时间/);
+  assert.doesNotMatch(metadata, /礼金库路径/);
+});
+
+test("first vault creation requires a desktop-default folder and vault path moves validate safely", async () => {
+  const [app, api, rust] = await Promise.all([
+    readFile(new URL("../src/App.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../src/lib/tauri.ts", import.meta.url), "utf8"),
+    readFile(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(app, /DefaultStorageSetupModal/);
+  assert.match(app, /storage\.configured/);
+  assert.match(app, /编辑礼金库路径/);
+  assert.match(api, /editVault: \(name: string, notes: string, path: string\)/);
+  assert.match(rust, /fn edit_vault\(\s*name: String,\s*notes: String,\s*path: String/);
+  assert.match(rust, /auto_backup_for_path\(&source, "move", true\)/);
+  assert.match(rust, /目标文件夹不可写/);
+  assert.match(rust, /copy_vault_read_only\(&source, &destination\)/);
+  assert.match(rust, /validate_vault_file\(&destination\)/);
+});
+
 test("arrow keys scroll the active page without hijacking form controls", async () => {
   const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
   assert.match(source, /ArrowUp.*ArrowDown.*ArrowLeft.*ArrowRight/);

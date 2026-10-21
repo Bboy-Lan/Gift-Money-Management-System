@@ -11,7 +11,7 @@ test("isolated delivery versions, identity, offline policy and CSP", async () =>
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const config = JSON.parse(await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"));
   const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
-  assert.equal(pkg.version, "0.4.40");
+  assert.equal(pkg.version, "0.4.41");
   assert.equal(config.version, pkg.version);
   assert.ok(cargo.includes(`version = "${pkg.version}"`));
   assert.equal(pkg.devDependencies.jsdom, "26.1.0");

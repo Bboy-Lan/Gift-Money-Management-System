@@ -1084,3 +1084,18 @@ html, body, #root { width: 100%; height: 100%; overflow: hidden; }
 .query-error { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
 .query-error small { flex-basis: 100%; }
 .query-error span { overflow-wrap: anywhere; }
+
+/* The vault list owns the flexible middle section; fixed actions and navigation never get pushed away. */
+.sidebar { min-height: 0; overflow: hidden; }
+.sidebar > .sidebar-create:first-child { margin-top: 0; }
+.book-list { min-height: 0; flex: 1 1 auto; overflow-y: auto; margin-top: 14px; padding-right: 2px; align-content: start; }
+.sidebar-bottom { flex: 0 0 auto; }
+.opened-vault-tab, .book-item-row { touch-action: auto; }
+.opened-vault-tab-select, .book-item-row .book-item { touch-action: none; }
+.opened-vault-tab-edit { display: grid; place-items: center; width: 23px; height: 23px; margin-left: 2px; padding: 0; color: #47757a; border: 0; border-radius: 4px; background: transparent; cursor: pointer; }
+.opened-vault-tab-edit:hover { color: #16655e; background: #eff8f6; }
+.opened-vault-tab-edit:focus-visible, .opened-vault-tab-close:focus-visible, .opened-vault-tab-select:focus-visible { outline: 2px solid #5a9ab2; outline-offset: 1px; }
+.vault-path-picker { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.vault-path-picker input { min-width: 0; color: #64757e; background: #f7faf9; }
+.book-metadata { display: grid; gap: 4px; }
+.book-metadata p { margin: 0; }

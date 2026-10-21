@@ -8,6 +8,7 @@ use rust_xlsxwriter::{ExcelDateTime, Format, Workbook};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
+use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -731,7 +732,7 @@ fn set_admin_session(state: &AppState) -> Result<(), String> {
     session.role = SessionRole::Admin;
     session.failed_attempts = 0;
     session.locked_until = None;
-    session.edit_locked = true;
+    session.edit_locked = false;
     Ok(())
 }
 
@@ -1754,6 +1755,37 @@ fn copy_vault_read_only(source: &Path, destination: &Path) -> Result<(), String>
         .map_err(|error| error.to_string())
 }
 
+fn move_vault_file(source: &Path, destination: &Path) -> Result<(), String> {
+    let parent = destination
+        .parent()
+        .filter(|directory| directory.is_dir())
+        .ok_or_else(|| "目标文件夹不存在或不可用".to_string())?;
+    let probe = parent.join(format!(".giftvault-write-check-{}", Uuid::new_v4()));
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+        .map_err(|error| format!("目标文件夹不可写：{error}"))?;
+    std::fs::remove_file(&probe).map_err(|error| format!("无法清理目标文件夹校验文件：{error}"))?;
+    if let Err(error) = copy_vault_read_only(source, destination) {
+        let _ = std::fs::remove_file(destination);
+        return Err(error);
+    }
+    if let Err(error) = validate_vault_file(destination) {
+        let _ = std::fs::remove_file(destination);
+        return Err(format!("复制后的礼金库校验失败，未移动原文件：{error}"));
+    }
+    if let Err(error) = std::fs::remove_file(source) {
+        if std::fs::remove_file(destination).is_err() {
+            return Err(format!(
+                "无法删除原礼金库，且无法清理新副本；已保留原文件：{error}"
+            ));
+        }
+        return Err(format!("无法删除原礼金库，已取消路径修改：{error}"));
+    }
+    Ok(())
+}
+
 fn automatic_backup_path(directory: &Path, prefix: &str) -> PathBuf {
     let timestamp = Local::now().format("%Y%m%d-%H%M%S-%3f");
     directory.join(format!("{prefix}-{timestamp}-{}.giftvault", Uuid::new_v4()))
@@ -2289,9 +2321,9 @@ fn settings_storage_info(app: tauri::AppHandle) -> SettingsStorageInfo {
     let settings = read_app_settings(&app);
     let configured = settings.data_directory.is_some();
     let directory = settings.data_directory.unwrap_or_else(|| {
-        app.path()
-            .document_dir()
-            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        desktop_directory(&app)
+            .or_else(|| app.path().document_dir().ok())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
             .to_string_lossy()
             .to_string()
     });
@@ -2304,7 +2336,10 @@ fn settings_storage_info(app: tauri::AppHandle) -> SettingsStorageInfo {
 #[tauri::command(async)]
 fn choose_settings_directory(app: tauri::AppHandle) -> Result<Option<SettingsStorageInfo>, String> {
     let _operation = begin_operation()?;
-    let Some(directory) = default_file_dialog().pick_folder() else {
+    let dialog = desktop_directory(&app)
+        .map(|directory| FileDialog::new().set_directory(directory))
+        .unwrap_or_else(default_file_dialog);
+    let Some(directory) = dialog.pick_folder() else {
         return Ok(None);
     };
     let directory = displayable_path(&directory);
@@ -2378,6 +2413,7 @@ fn create_vault_file(path: &Path, name: &str, notes: &str) -> Result<(), String>
 fn edit_vault(
     name: String,
     notes: String,
+    path: String,
     vault_path: String,
     state: State<'_, AppState>,
 ) -> Result<VaultInfo, String> {
@@ -2385,8 +2421,23 @@ fn edit_vault(
     if name.trim().is_empty() {
         return Err("礼金库名称不能为空".to_string());
     }
+    let source = canonical_opened_vault_path(&state, Some(&vault_path))?;
+    let destination = normalize_vault_path(&path);
+    let path_changed = comparable_path(&source) != comparable_path(&destination);
+    if path_changed && destination.exists() {
+        return Err("目标礼金库已存在，请选择其他位置或文件名".to_string());
+    }
+    if path_changed {
+        let destination_key = comparable_path(&destination);
+        if opened_vault_paths(&state)?
+            .iter()
+            .any(|opened| comparable_path(opened) == destination_key)
+        {
+            return Err("目标路径已在当前工作区打开，请先关闭该礼金库".to_string());
+        }
+        auto_backup_for_path(&source, "move", true)?;
+    }
     let mut connection = admin_connection(&state, &vault_path, "edit-vault", false)?;
-    let path = canonical_opened_vault_path(&state, Some(&vault_path))?;
     let transaction = connection
         .transaction()
         .map_err(|error| error.to_string())?;
@@ -2426,6 +2477,14 @@ fn edit_vault(
             &next_notes,
         ));
     }
+    if path_changed {
+        changes.push(machine_change(
+            "礼金库路径",
+            "path",
+            displayable_path(&source),
+            displayable_path(&destination),
+        ));
+    }
     transaction
         .execute(
             "INSERT OR REPLACE INTO vault_meta(key, value) VALUES ('name', ?), ('notes', ?)",
@@ -2455,7 +2514,29 @@ fn edit_vault(
         )?;
     }
     transaction.commit().map_err(|error| error.to_string())?;
-    vault_info(&path, &connection)
+    drop(connection);
+    if path_changed {
+        move_vault_file(&source, &destination)?;
+        {
+            let mut opened = state
+                .opened_vault_paths
+                .lock()
+                .map_err(|_| "礼金库打开状态不可用".to_string())?;
+            for opened_path in opened.iter_mut() {
+                if comparable_path(opened_path) == comparable_path(&source) {
+                    *opened_path = destination.clone();
+                }
+            }
+        }
+        *state
+            .vault_path
+            .lock()
+            .map_err(|_| "礼金库状态不可用".to_string())? = Some(destination.clone());
+    }
+    let result_path = if path_changed { &destination } else { &source };
+    let connection = Connection::open_with_flags(result_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| error.to_string())?;
+    vault_info(result_path, &connection)
 }
 
 #[tauri::command]
@@ -8534,18 +8615,18 @@ mod tests {
     }
 
     #[test]
-    fn remediation_clear_trash_does_not_promote_viewer_or_unlock_admin() {
+    fn remediation_clear_trash_requires_admin_pin_but_admin_starts_edit_unlocked() {
         let state = remediation_security_state();
         assert!(authorize_empty_trash(&state, "123456").is_err());
         assert!(state.session.lock().unwrap().role == SessionRole::Viewer);
         set_admin_session(&state).unwrap();
-        assert!(authorize_empty_trash(&state, "123456").is_err());
-        assert!(state.session.lock().unwrap().edit_locked);
-        set_edit_locked(&state, false).unwrap();
+        assert!(!state.session.lock().unwrap().edit_locked);
         assert!(authorize_empty_trash(&state, "654321").is_err());
         authorize_empty_trash(&state, "123456").unwrap();
         assert!(state.session.lock().unwrap().role == SessionRole::Admin);
         assert!(!state.session.lock().unwrap().edit_locked);
+        set_edit_locked(&state, true).unwrap();
+        assert!(authorize_empty_trash(&state, "123456").is_err());
     }
 
     #[test]
@@ -10156,6 +10237,45 @@ mod tests {
         drop(destination_connection);
         drop(source_connection);
         std::fs::remove_dir_all(&directory).expect("remove export directory");
+    }
+
+    #[test]
+    fn moving_vault_validates_the_new_copy_before_removing_the_source() {
+        let directory = std::env::temp_dir().join(format!("lijin-book-move-{}", Uuid::new_v4()));
+        let source = directory.join("source.giftvault");
+        let destination = directory.join("moved").join("destination.giftvault");
+        std::fs::create_dir_all(&directory).expect("move test directory");
+        std::fs::create_dir_all(destination.parent().expect("move destination directory"))
+            .expect("create move destination directory");
+        {
+            let connection = Connection::open(&source).expect("create source vault");
+            migrate(&connection).expect("migrate source vault");
+            connection
+                .execute(
+                    "INSERT INTO vault_meta(key, value) VALUES ('name', '迁移测试')",
+                    [],
+                )
+                .expect("add source metadata");
+        }
+
+        move_vault_file(&source, &destination).expect("move validated vault");
+
+        assert!(!source.exists());
+        assert!(destination.is_file());
+        validate_vault_file(&destination).expect("validate moved vault");
+        let connection =
+            Connection::open_with_flags(&destination, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .expect("open moved vault");
+        let name: String = connection
+            .query_row(
+                "SELECT value FROM vault_meta WHERE key = 'name'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read moved metadata");
+        assert_eq!(name, "迁移测试");
+        drop(connection);
+        std::fs::remove_dir_all(&directory).expect("remove move test directory");
     }
 
     #[test]

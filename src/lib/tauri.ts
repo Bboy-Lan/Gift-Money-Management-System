@@ -22,7 +22,7 @@ function createApi(invoke: typeof import("@tauri-apps/api/core").invoke) { retur
   chooseVaultPath: (mode: "open" | "save", fileName?: string) => fileName ? invoke<string | null>("choose_vault_path_named", { mode, fileName }) : invoke<string | null>("choose_vault_path", { mode }),
   chooseComparisonVaultPaths: () => invoke<string[]>("choose_comparison_vault_paths"),
   createVault: (path: string, name: string, notes: string) => invoke<VaultOpenResult>("create_vault", { path, name, notes }),
-  editVault: (name: string, notes: string) => invoke<VaultInfo>("edit_vault", { name, notes }),
+  editVault: (name: string, notes: string, path: string) => invoke<VaultInfo>("edit_vault", { name, notes, path }),
   currentVaultInfo: () => invoke<VaultInfo>("current_vault_info"),
   openVault: (path: string) => invoke<VaultOpenResult>("open_vault", { path }),
   closeVault: () => invoke<void>("close_vault"),

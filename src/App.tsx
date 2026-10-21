@@ -42,9 +42,9 @@ import { SoftwareUpdateContext, useSoftwareUpdates } from "./hooks/useSoftwareUp
 import { updateStatusMessage, type UpdatePhase } from "./lib/softwareUpdates";
 import { invalidateVaultQueries } from "./lib/vaultQueries";
 import { allowFormClose, canRestoreAudit, firstCharacter, validateChangedDate, validateChangedText } from "./lib/viewSafety";
-import { forgetRecentVault, forgetRecentVaultPath, readRecentVaults, recentVaultIdentity, rememberRecentVault, type RecentVault } from "./lib/recentVaults";
+import { forgetRecentVault, forgetRecentVaultPath, readRecentVaults, recentVaultIdentity, rememberRecentVault, replaceRecentVaultPath, type RecentVault } from "./lib/recentVaults";
 import { orderGiftBooks, readComparisonVaults, readGiftBookOrder, rememberGiftBookOrder } from "./lib/comparisonVaults";
-import { closeVaultSession, navigateVaultResult, readOpenedVaultSessions, rememberOpenedVaultSessions, type OpenedVaultSessionState } from "./lib/openedVaultSessions";
+import { closeVaultSession, navigateVaultResult, readOpenedVaultSessions, rememberOpenedVaultSessions, replaceOpenedVaultSessionPath, type OpenedVaultSessionState } from "./lib/openedVaultSessions";
 import { readOpenedVaultOrder, rememberOpenedVaultOrder } from "./lib/openedVaultOrder";
 import { canonicalizeTags, resolveCatalogTags } from "./lib/tagCatalog";
 import { getEntryTagSections, mergeEntryTag } from "./lib/entryTags";
@@ -200,6 +200,7 @@ function App() {
   const [workspaceOpen, setWorkspaceOpen] = useState(false);
   const [softwareSettingsOpen, setSoftwareSettingsOpen] = useState(false);
   const [createVaultOpen, setCreateVaultOpen] = useState(false);
+  const [defaultStorageSetupOpen, setDefaultStorageSetupOpen] = useState(false);
   const [createVaultSaving, setCreateVaultSaving] = useState(false);
   const [createVaultError, setCreateVaultError] = useState<unknown>(null);
   const [vaultName, setVaultName] = useState("我的家庭礼金库");
@@ -409,9 +410,18 @@ function App() {
   const rememberOpenedVault = useCallback((info: VaultInfo, book?: Pick<GiftBook, "id" | "title">) => {
     setRecentVaults(rememberRecentVault(info, book));
   }, []);
-  const handleVaultUpdated = useCallback((updated: VaultInfo) => {
+  const handleVaultUpdated = useCallback((updated: VaultInfo, previousPath = updated.path) => {
+    const previousKey = vaultPathKey(previousPath);
     setVault(updated);
-    setOpenedVaults((current) => current.map((item) => vaultPathKey(item.vault.path) === vaultPathKey(updated.path) ? { ...item, vault: updated } : item));
+    setOpenedVaults((current) => current.map((item) => vaultPathKey(item.vault.path) === previousKey ? { ...item, vault: updated } : item));
+    setBookSelections((current) => {
+      if (previousKey === vaultPathKey(updated.path) || !(previousKey in current)) return current;
+      const { [previousKey]: selectedBook, ...remaining } = current;
+      return { ...remaining, [vaultPathKey(updated.path)]: selectedBook };
+    });
+    setOpenedVaultOrder((current) => rememberOpenedVaultOrder(current.map((path) => vaultPathKey(path) === previousKey ? updated.path : path)));
+    setRecentVaults(replaceRecentVaultPath(previousPath, updated.path));
+    replaceOpenedVaultSessionPath(previousPath, updated.path);
     rememberOpenedVault(updated);
   }, [rememberOpenedVault]);
   const handleVaultActivity = useCallback((book?: Pick<GiftBook, "id" | "title">) => {
@@ -598,6 +608,31 @@ function App() {
     } finally { setCreateVaultSaving(false); endNavigation(); }
   };
 
+  const beginCreateVault = async () => {
+    try {
+      const storage = await api.settingsStorageInfo();
+      if (!storage.configured) {
+        setDefaultStorageSetupOpen(true);
+        return;
+      }
+      setCreateVaultOpen(true);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const configureDefaultStorageAndCreate = async () => {
+    try {
+      const storage = await api.chooseSettingsDirectory();
+      if (!storage) return;
+      setDefaultStorageSetupOpen(false);
+      setCreateVaultOpen(true);
+      showNotice("默认礼金库文件夹已设置");
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
   const chooseSpreadsheetPathsForWorkspace = async () => {
     try {
       const paths = uniquePaths(await api.chooseSpreadsheetPaths());
@@ -741,6 +776,7 @@ function App() {
     {adminPrompt === "recover" && <RecoveryResetModal onClose={() => setAdminPrompt(null)} onSubmit={resetAdminPin} />}
     {(adminPrompt === "unlock" || adminPrompt === "setup") && <PinModal mode={adminPrompt} onClose={() => { if (adminPrompt !== "setup") { setAdminPrompt(null); setEnterWorkspaceAfterAdmin(false); setPendingWorkspaceVault(null); } }} onSubmit={unlockAdmin} onRecover={() => setAdminPrompt("recover")} />}
     {pinChangeOpen && <PinChangeModal onClose={() => setPinChangeOpen(false)} onSubmit={changeAdminPin} />}
+    {defaultStorageSetupOpen && <DefaultStorageSetupModal onClose={() => setDefaultStorageSetupOpen(false)} onChoose={() => void configureDefaultStorageAndCreate()} />}
     {recoveryCode && <RecoveryCodeModal code={recoveryCode} onClose={() => setRecoveryCode(null)} />}
     {error && <ErrorToast message={error} onClose={() => setError(null)} />}
     {notice && <SuccessToast message={notice} className={!workspaceOpen && !vault ? "welcome-update-notice" : undefined} />}
@@ -757,7 +793,7 @@ function App() {
 
   if (!vault) {
     return <SoftwareUpdateContext.Provider value={updates}><>
-      <WorkspaceStart session={session} updateStatus={updates.status} pendingSpreadsheetPaths={pendingSpreadsheetPaths} onClose={returnToStartPage} onOpenVault={openVault} onBeginCreate={() => setCreateVaultOpen(true)} onChooseImport={() => void chooseSpreadsheetPathsForWorkspace()} onUnlock={() => { setEnterWorkspaceAfterAdmin(false); setPendingWorkspaceVault(null); setAdminPrompt(session.securityConfigured ? "unlock" : "setup"); }} onChangePin={() => setPinChangeOpen(true)} onOpenSoftwareSettings={() => setSoftwareSettingsOpen(true)} />
+      <WorkspaceStart session={session} updateStatus={updates.status} pendingSpreadsheetPaths={pendingSpreadsheetPaths} onClose={returnToStartPage} onOpenVault={openVault} onBeginCreate={() => void beginCreateVault()} onChooseImport={() => void chooseSpreadsheetPathsForWorkspace()} onUnlock={() => { setEnterWorkspaceAfterAdmin(false); setPendingWorkspaceVault(null); setAdminPrompt(session.securityConfigured ? "unlock" : "setup"); }} onChangePin={() => setPinChangeOpen(true)} onOpenSoftwareSettings={() => setSoftwareSettingsOpen(true)} />
       {createVaultOpen && <CreateVaultModal error={createVaultError} isSaving={createVaultSaving} vaultName={vaultName} vaultNotes={vaultNotes} onNameChange={setVaultName} onNotesChange={setVaultNotes} onClose={() => setCreateVaultOpen(false)} onCreate={createVault} />}
       {softwareSettingsOpen && <NoVaultSoftwareSettings updatePhase={localUpdatePhase} updateStatus={updates.status} lastUpdateCheckAt={lastUpdateCheckAt} onCheckUpdate={checkLocalUpdate} onInstallUpdate={installLocalUpdate} onError={setError} onClose={() => setSoftwareSettingsOpen(false)} />}
       {overlays}
@@ -770,7 +806,7 @@ function App() {
     return (leftIndex < 0 ? openedVaults.length : leftIndex) - (rightIndex < 0 ? openedVaults.length : rightIndex);
   });
   return <SoftwareUpdateContext.Provider value={updates}><>
-    <VaultScopeContext.Provider value={scope}><div inert={switching || localUpdatePhase === "installing"} aria-busy={switching || localUpdatePhase === "installing"}><VaultWorkspace key={vault.path} initialEntryId={navigationEntryId} vault={vault} openedVaults={orderedOpenedVaults} initialBookId={pendingWorkspaceBookId} initialTab={workspaceTab} session={session} continuousRegistration={continuousRegistration} onContinuousRegistrationChange={setContinuousRegistration} onClose={returnToStartPage} onCloseVault={closeOpenedVault} onReorderVaults={reorderOpenedVaults} onError={setError} onNotice={showNotice} onUnlock={() => { setEnterWorkspaceAfterAdmin(false); setPendingWorkspaceVault(null); setAdminPrompt(session.securityConfigured ? "unlock" : "setup"); }} onLock={lockAdmin} onUnlockEditing={unlockEditing} onLockEditing={lockEditing} onChangePin={() => setPinChangeOpen(true)} onCheckLocalUpdate={checkLocalUpdate} onInstallLocalUpdate={installLocalUpdate} localUpdatePhase={localUpdatePhase} updateStatus={localUpdate.data ?? null} lastUpdateCheckAt={lastUpdateCheckAt} pendingSpreadsheetPaths={pendingSpreadsheetPaths} onConsumeSpreadsheetPaths={() => setPendingSpreadsheetPaths([])} onBeginCreateVault={() => setCreateVaultOpen(true)} onOpenVault={openVault} onSwitchVault={switchVault} onOpenSearchVault={openSearchVault} onBookSelectionChange={handleBookSelectionChange} onTabChange={handleTabChange} onVaultActivity={handleVaultActivity} onVaultUpdated={handleVaultUpdated} /></div></VaultScopeContext.Provider>
+    <VaultScopeContext.Provider value={scope}><div inert={switching || localUpdatePhase === "installing"} aria-busy={switching || localUpdatePhase === "installing"}><VaultWorkspace key={vault.path} initialEntryId={navigationEntryId} vault={vault} openedVaults={orderedOpenedVaults} initialBookId={pendingWorkspaceBookId} initialTab={workspaceTab} session={session} continuousRegistration={continuousRegistration} onContinuousRegistrationChange={setContinuousRegistration} onClose={returnToStartPage} onCloseVault={closeOpenedVault} onReorderVaults={reorderOpenedVaults} onError={setError} onNotice={showNotice} onUnlock={() => { setEnterWorkspaceAfterAdmin(false); setPendingWorkspaceVault(null); setAdminPrompt(session.securityConfigured ? "unlock" : "setup"); }} onLock={lockAdmin} onUnlockEditing={unlockEditing} onLockEditing={lockEditing} onChangePin={() => setPinChangeOpen(true)} onCheckLocalUpdate={checkLocalUpdate} onInstallLocalUpdate={installLocalUpdate} localUpdatePhase={localUpdatePhase} updateStatus={localUpdate.data ?? null} lastUpdateCheckAt={lastUpdateCheckAt} pendingSpreadsheetPaths={pendingSpreadsheetPaths} onConsumeSpreadsheetPaths={() => setPendingSpreadsheetPaths([])} onBeginCreateVault={() => void beginCreateVault()} onOpenVault={openVault} onSwitchVault={switchVault} onOpenSearchVault={openSearchVault} onBookSelectionChange={handleBookSelectionChange} onTabChange={handleTabChange} onVaultActivity={handleVaultActivity} onVaultUpdated={handleVaultUpdated} /></div></VaultScopeContext.Provider>
     {createVaultOpen && <CreateVaultModal error={createVaultError} isSaving={createVaultSaving} vaultName={vaultName} vaultNotes={vaultNotes} onNameChange={setVaultName} onNotesChange={setVaultNotes} onClose={() => setCreateVaultOpen(false)} onCreate={createVault} />}
     {overlays}
   </></SoftwareUpdateContext.Provider>;
@@ -784,16 +820,13 @@ function VersionBadge() {
   return <span className="version-badge">v{__APP_VERSION__}</span>;
 }
 
-function BookMetadata({ book, vaultPath }: { book: GiftBook; vaultPath: string }) {
-  const activity = [book.occasion, book.eventDate, book.location].filter(Boolean).join(" · ");
-  const imported = Boolean(book.sourceFilePath || book.sourceImportedAt);
-  return <>
-    {activity && <p>{activity}</p>}
-    <div className="book-source-box">
-      <span className="book-source-time">{imported ? "导入时间" : "创建时间"}：{new Date(imported ? book.sourceImportedAt! : book.createdAt).toLocaleString("zh-CN", { hour12: false })}</span>
-      <span className="book-source-path" title={imported ? book.sourceFilePath ?? "" : vaultPath}>{imported ? "原表格路径" : "礼金库路径"}：{imported ? book.sourceFilePath ?? "未记录" : vaultPath}</span>
-    </div>
-  </>;
+function BookMetadata({ book }: { book: GiftBook }) {
+  const timeAndLocation = [`活动时间：${book.eventDate ?? "未填写"}`, `地点：${book.location ?? "未填写"}`].join(" · ");
+  return <div className="book-metadata">
+    <p>活动类型：{book.occasion || "未填写"}</p>
+    <p>{timeAndLocation}</p>
+    <p>备注：{book.notes?.trim() || "未填写"}</p>
+  </div>;
 }
 
 function isRestorableAuditRecord(record: AuditLog) {
@@ -849,7 +882,7 @@ function WorkspaceStart({ session, updateStatus, pendingSpreadsheetPaths, onClos
   return (
     <div className="app-shell workspace-start">
       <header className="topbar"><div className="topbar-brand"><div className="brand-mark small"><BookOpen size={17} /></div><strong>礼金簿管理</strong><span className="slash">/</span><span className="vault-label">未打开礼金库</span></div><div className="topbar-actions"><span className={`role-badge ${isAdmin ? "admin" : "viewer"}`}>{isAdmin ? "管理员模式" : "用户模式"}</span>{updateStatus?.candidate && <button className="software-update-entry" type="button" title={`发现新版本 v${updateStatus.candidate.version}，查看更新方式`} onClick={onOpenSoftwareSettings}><RefreshCw size={15} /><span>软件更新</span><small>发现新版本</small></button>}{isAdmin && <button className="secondary-button compact" title="修改管理员 PIN" onClick={onChangePin}><KeyRound size={14} />修改 PIN</button>}<button className="secondary-button compact return-start-button" title="返回启动页" onClick={onClose}><ArrowLeft size={15} />返回启动页</button></div></header>
-      <div className="workspace"><aside className="sidebar"><div className="sidebar-heading"><span>礼金簿管理</span></div>{isAdmin ? <button className="sidebar-create" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button> : <button className="sidebar-create" onClick={onUnlock}><Unlock size={16} />解锁管理并新建礼金库</button>}<button className="sidebar-create sidebar-open" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin && <button className="sidebar-create sidebar-import" onClick={onChooseImport}><FileSpreadsheet size={15} />导入表格</button>}<div className="sidebar-bottom"><VersionBadge /></div></aside>
+      <div className="workspace"><aside className="sidebar">{isAdmin ? <button className="sidebar-create" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button> : <button className="sidebar-create" onClick={onUnlock}><Unlock size={16} />解锁管理并新建礼金库</button>}<button className="sidebar-create sidebar-open" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin && <button className="sidebar-create sidebar-import" onClick={onChooseImport}><FileSpreadsheet size={15} />导入表格</button>}<div className="sidebar-bottom"><VersionBadge /></div></aside>
         <main className="content-area"><section className="workspace-empty"><BookOpen size={30} /><h2>尚未打开礼金库</h2><div className="workspace-empty-actions"><button className="primary-button" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>{isAdmin ? <button className="secondary-button" onClick={onBeginCreate}><CirclePlus size={16} />新建礼金库</button> : <button className="secondary-button" onClick={onUnlock}><Unlock size={16} />解锁管理并新建礼金库</button>}</div>
           <section className="vault-onboarding" aria-label="礼金库与礼金簿使用流程"><div className="vault-onboarding-heading"><div><Info size={17} /><strong>新手使用指南</strong></div><span>礼金库 → 礼金簿 → 礼金记录</span></div><div className="vault-onboarding-flow"><article><span className="vault-onboarding-step">1</span><div className="vault-onboarding-card-top"><Archive size={22} /><span className="vault-onboarding-example">王家礼金库</span></div><strong>第一步　新建礼金库</strong><small>一个家庭对应一个可移动的 .giftvault 文件</small></article><ArrowRight className="vault-onboarding-arrow" size={20} /><article><span className="vault-onboarding-step">2</span><div className="vault-onboarding-card-top"><BookOpen size={22} /><span className="vault-onboarding-example">王伟婚礼礼金簿</span></div><strong>第二步　在库内新建礼金簿</strong><small>一本礼金簿对应一次办事或一个场景</small></article><ArrowRight className="vault-onboarding-arrow" size={20} /><article><span className="vault-onboarding-step">3</span><div className="vault-onboarding-card-top"><Gift size={22} /><span className="vault-onboarding-example">礼金登记</span></div><strong>第三步　登记礼金</strong><small>记录来宾、金额、地址、标签与回礼</small></article></div><div className="vault-onboarding-footnote"><p className="vault-onboarding-first-use"><strong>第一次使用</strong><span>新建礼金库 → 新建礼金簿 → 开始登记</span></p><p><strong>已有数据</strong><span>点击“打开礼金库”，选择原来的 .giftvault 文件</span></p></div></section>
           {isAdmin && pendingSpreadsheetPaths.length > 0 && <span className="field-hint">已暂存 {pendingSpreadsheetPaths.length} 个表格文件。</span>}
@@ -875,7 +908,11 @@ function CreateVaultModal({ error, isSaving, vaultName, vaultNotes, onNameChange
   return <Modal title="新建家庭礼金库" owner="create-vault" onClose={onClose} isSaving={isSaving} error={error || validationError}><label>礼金库名称<input value={vaultName} onChange={(event) => onNameChange(event.target.value)} autoFocus /></label><label>礼金库备注<textarea value={vaultNotes} onChange={(event) => onNotesChange(event.target.value)} placeholder="可选，例如家庭成员或使用范围" /></label><p className="field-hint">礼金库创建后会直接进入工作页。</p><div className="modal-actions"><button className="secondary-button" onClick={onClose}>取消</button><button className="primary-button" disabled={!vaultName.trim() || Boolean(validationError) || isSaving} onClick={onCreate}>选择保存位置</button></div></Modal>;
 }
 
-function OpenedVaultTab({ item, active, dragged, dropTarget, onSwitch, onClose, onDragState, onDrop }: { item: OpenedVaultSession; active: boolean; dragged: boolean; dropTarget: boolean; onSwitch: (path: string) => void; onClose: (path: string) => void; onDragState: (path: string | null, target: string | null) => void; onDrop: (path: string, target: string | null) => void }) {
+function DefaultStorageSetupModal({ onClose, onChoose }: { onClose: () => void; onChoose: () => void }) {
+  return <Modal title="设置默认礼金库文件夹" onClose={onClose}><p className="field-hint">首次新建前，请选择默认保存文件夹。已默认定位到桌面；以后可在“设置”中更改，且不会移动已有礼金库。</p><div className="modal-actions"><button className="secondary-button" onClick={onClose}>暂不新建</button><button className="primary-button" onClick={onChoose}><FolderOpen size={16} />选择默认文件夹</button></div></Modal>;
+}
+
+function OpenedVaultTab({ item, active, canEdit, dragged, dropTarget, onSwitch, onClose, onEdit, onDragState, onDrop }: { item: OpenedVaultSession; active: boolean; canEdit: boolean; dragged: boolean; dropTarget: boolean; onSwitch: (path: string) => void; onClose: (path: string) => void; onEdit: () => void; onDragState: (path: string | null, target: string | null) => void; onDrop: (path: string, target: string | null) => void }) {
   const [showClose, setShowClose] = useState(false);
   const hoverTimerRef = useRef<number | null>(null);
   const dragTimerRef = useRef<number | null>(null);
@@ -895,7 +932,7 @@ function OpenedVaultTab({ item, active, dragged, dropTarget, onSwitch, onClose, 
     if (hoverTimerRef.current !== null) window.clearTimeout(hoverTimerRef.current);
     if (dragTimerRef.current !== null) window.clearTimeout(dragTimerRef.current);
   }, []);
-  const startDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+  const startDrag = (event: React.PointerEvent<HTMLElement>) => {
     if (event.button !== 0) return;
     const pointerId = event.pointerId;
     if (dragTimerRef.current !== null) window.clearTimeout(dragTimerRef.current);
@@ -907,7 +944,7 @@ function OpenedVaultTab({ item, active, dragged, dropTarget, onSwitch, onClose, 
       event.currentTarget.setPointerCapture?.(pointerId);
     }, 350);
   };
-  const moveDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+  const moveDrag = (event: React.PointerEvent<HTMLElement>) => {
     if (!draggingRef.current) return;
     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>("[data-vault-path]");
     dragTargetPathRef.current = target?.dataset.vaultPath ?? dragTargetPathRef.current ?? item.vault.path;
@@ -933,7 +970,7 @@ function OpenedVaultTab({ item, active, dragged, dropTarget, onSwitch, onClose, 
     window.addEventListener("pointermove", trackWindowPointer, true);
     return () => window.removeEventListener("pointermove", trackWindowPointer, true);
   }, [item.vault.path, onDragState]);
-  return <div className={`opened-vault-tab ${active ? "active" : ""} ${dragged ? "dragging" : ""} ${dropTarget ? "drag-target" : ""}`} data-vault-path={item.vault.path} title={item.vault.path} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={finishDrag} onMouseEnter={beginHover} onMouseLeave={endHover} onFocusCapture={() => setShowClose(true)} onBlurCapture={endHover}><button type="button" className="opened-vault-tab-select" aria-pressed={active} onClick={() => { if (!suppressClickRef.current) onSwitch(item.vault.path); }}><Archive size={14} /><span>{item.vault.name}</span></button>{showClose && <button type="button" className="opened-vault-tab-close" aria-label={`关闭礼金库「${item.vault.name}」`} title={`关闭「${item.vault.name}」；不会删除原始文件`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onClose(item.vault.path); }}><X size={13} /></button>}</div>;
+  return <div className={`opened-vault-tab ${active ? "active" : ""} ${dragged ? "dragging" : ""} ${dropTarget ? "drag-target" : ""}`} data-vault-path={item.vault.path} title={item.vault.path} onMouseEnter={beginHover} onMouseLeave={endHover} onFocusCapture={() => setShowClose(true)} onBlurCapture={endHover}><button type="button" className="opened-vault-tab-select" aria-pressed={active} onPointerDown={startDrag} onPointerMove={moveDrag} onPointerUp={finishDrag} onPointerCancel={finishDrag} onClick={() => { if (!suppressClickRef.current) onSwitch(item.vault.path); }}><Archive size={14} /><span>{item.vault.name}</span></button>{active && canEdit && <button type="button" className="opened-vault-tab-edit" aria-label={`编辑礼金库「${item.vault.name}」`} title="编辑礼金库" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onEdit(); }}><Pencil size={13} /></button>}{showClose && <button type="button" className="opened-vault-tab-close" aria-label={`关闭礼金库「${item.vault.name}」`} title={`关闭「${item.vault.name}」；不会删除原始文件`} onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onClose(item.vault.path); }}><X size={13} /></button>}</div>;
 }
 
 function BookListItem({ book, active, dragged, dropTarget, onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onSelect, onClose }: { "data-book-id"?: string; book: GiftBook; active: boolean; dragged: boolean; dropTarget: boolean; onPointerDown: (event: React.PointerEvent<HTMLElement>) => void; onPointerMove: (event: React.PointerEvent<HTMLElement>) => void; onPointerUp: () => void; onPointerCancel: () => void; onSelect: () => void; onClose: () => void }) {
@@ -949,23 +986,35 @@ function BookListItem({ book, active, dragged, dropTarget, onPointerDown, onPoin
     setShowClose(false);
   };
   useEffect(() => () => { if (hoverTimerRef.current !== null) window.clearTimeout(hoverTimerRef.current); }, []);
-  return <div className={`book-item-row ${dragged ? "dragging" : ""} ${dropTarget ? "drag-target" : ""}`} data-book-id={book.id} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onMouseEnter={beginHover} onMouseLeave={endHover} onFocusCapture={() => setShowClose(true)} onBlurCapture={endHover}><button type="button" className={`book-item ${active ? "active" : ""}`} onClick={onSelect}><span className="book-icon"><FileSpreadsheet size={15} /></span><span className="book-item-text"><strong>{book.title}</strong></span><ChevronRight size={15} /></button>{showClose && <button type="button" className="book-item-close" title={`关闭礼金簿“${book.title}”`} aria-label={`关闭礼金簿“${book.title}”；不会删除数据`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onClose(); }}><X size={13} /></button>}</div>;
+  return <div className={`book-item-row ${dragged ? "dragging" : ""} ${dropTarget ? "drag-target" : ""}`} data-book-id={book.id} onMouseEnter={beginHover} onMouseLeave={endHover} onFocusCapture={() => setShowClose(true)} onBlurCapture={endHover}><button type="button" className={`book-item ${active ? "active" : ""}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerCancel} onClick={onSelect}><span className="book-icon"><FileSpreadsheet size={15} /></span><span className="book-item-text"><strong>{book.title}</strong></span><ChevronRight size={15} /></button>{showClose && <button type="button" className="book-item-close" title={`关闭礼金簿“${book.title}”`} aria-label={`关闭礼金簿“${book.title}”；不会删除数据`} onPointerDown={(event) => event.stopPropagation()} onPointerUp={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onClose(); }}><X size={13} /></button>}</div>;
 }
 
-function VaultMetadataModal({ error, vault, isSaving, onClose, onSubmit }: { error: unknown; vault: VaultInfo; isSaving: boolean; onClose: () => void; onSubmit: (name: string, notes: string) => void }) {
+function VaultMetadataModal({ error, vault, isSaving, onClose, onSubmit, onChoosePath }: { error: unknown; vault: VaultInfo; isSaving: boolean; onClose: () => void; onSubmit: (name: string, notes: string, path: string) => void; onChoosePath: () => Promise<string | null> }) {
   const [name, setName] = useState(vault.name);
   const [notes, setNotes] = useState(vault.notes ?? "");
+  const [path, setPath] = useState(vault.path);
+  const [choosingPath, setChoosingPath] = useState(false);
   const validationError = validateChangedText("礼金库名称", name, 256, vault.name) || validateChangedText("礼金库备注", notes, 65536, vault.notes);
-  return <Modal title="编辑礼金库" onClose={onClose} isSaving={isSaving} error={error || validationError}><label>礼金库名称<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>礼金库备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="可选" /></label><p className="field-hint">只修改礼金库自身信息，不会改变内部礼金簿、人物或礼金记录的归属。</p><div className="modal-actions"><button className="secondary-button" disabled={isSaving} onClick={onClose}>取消</button><button className="primary-button" disabled={!name.trim() || Boolean(validationError) || isSaving} onClick={() => onSubmit(name === vault.name ? name : name.trim(), notes)}>{isSaving ? "保存中…" : "保存修改"}</button></div></Modal>;
+  const choosePath = async () => {
+    setChoosingPath(true);
+    try {
+      const selected = await onChoosePath();
+      if (selected) setPath(selected);
+    } finally {
+      setChoosingPath(false);
+    }
+  };
+  return <Modal title="编辑礼金库" onClose={onClose} isSaving={isSaving} error={error || validationError}><label>礼金库名称<input autoFocus value={name} onChange={(event) => setName(event.target.value)} /></label><label>礼金库路径<div className="vault-path-picker"><input value={path} readOnly title={path} /><button type="button" className="secondary-button compact" disabled={isSaving || choosingPath} onClick={() => void choosePath()}>{choosingPath ? "选择中…" : "编辑礼金库路径"}</button></div></label><label>礼金库备注<textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="可选" /></label><p className="field-hint">修改路径会先创建可打开的库快照，再移动 `.giftvault` 文件；原路径不保留副本。名称和备注不改变内部礼金簿、人物或礼金记录的归属。</p><div className="modal-actions"><button className="secondary-button" disabled={isSaving || choosingPath} onClick={onClose}>取消</button><button className="primary-button" disabled={!name.trim() || !path.trim() || Boolean(validationError) || isSaving || choosingPath} onClick={() => onSubmit(name === vault.name ? name : name.trim(), notes, path.trim())}>{isSaving ? "保存中…" : "保存修改"}</button></div></Modal>;
 }
 
-function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, initialTab, session, continuousRegistration, onContinuousRegistrationChange, onClose, onCloseVault, onReorderVaults, onError, onNotice, onUnlock, onLock, onUnlockEditing, onLockEditing, onChangePin, onCheckLocalUpdate, onInstallLocalUpdate, localUpdatePhase, updateStatus, lastUpdateCheckAt, pendingSpreadsheetPaths, onConsumeSpreadsheetPaths, onBeginCreateVault, onOpenVault, onSwitchVault, onOpenSearchVault, onBookSelectionChange, onTabChange, onVaultActivity, onVaultUpdated }: { initialEntryId: string | null; vault: VaultInfo; openedVaults: OpenedVaultSession[]; initialBookId: string | null; initialTab: Tab; session: SessionStatus; continuousRegistration: boolean; onContinuousRegistrationChange: (enabled: boolean) => void; onClose: () => void; onCloseVault: (path: string) => void | Promise<void>; onReorderVaults: (draggedPath: string, targetPath: string) => void; onError: (message: string) => void; onNotice: (message: string) => void; onUnlock: () => void; onLock: () => void; onUnlockEditing: () => void; onLockEditing: () => void; onChangePin: () => void; onCheckLocalUpdate: () => void; onInstallLocalUpdate: () => void; localUpdatePhase: LocalUpdatePhase; updateStatus: import("./types").SoftwareUpdateStatus | null; lastUpdateCheckAt: string | null; pendingSpreadsheetPaths: string[]; onConsumeSpreadsheetPaths: () => void; onBeginCreateVault: () => void; onOpenVault: () => void; onSwitchVault: (path: string) => Promise<void>; onOpenSearchVault: (path: string, bookId: string, entryId?: string | null, completedForm?: HTMLElement | null) => Promise<void>; onBookSelectionChange: (bookId: string | null) => void; onTabChange: (tab: Tab) => void; onVaultActivity: (book?: Pick<GiftBook, "id" | "title">) => void; onVaultUpdated: (vault: VaultInfo) => void }) {
+function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, initialTab, session, continuousRegistration, onContinuousRegistrationChange, onClose, onCloseVault, onReorderVaults, onError, onNotice, onUnlock, onLock, onUnlockEditing, onLockEditing, onChangePin, onCheckLocalUpdate, onInstallLocalUpdate, localUpdatePhase, updateStatus, lastUpdateCheckAt, pendingSpreadsheetPaths, onConsumeSpreadsheetPaths, onBeginCreateVault, onOpenVault, onSwitchVault, onOpenSearchVault, onBookSelectionChange, onTabChange, onVaultActivity, onVaultUpdated }: { initialEntryId: string | null; vault: VaultInfo; openedVaults: OpenedVaultSession[]; initialBookId: string | null; initialTab: Tab; session: SessionStatus; continuousRegistration: boolean; onContinuousRegistrationChange: (enabled: boolean) => void; onClose: () => void; onCloseVault: (path: string) => void | Promise<void>; onReorderVaults: (draggedPath: string, targetPath: string) => void; onError: (message: string) => void; onNotice: (message: string) => void; onUnlock: () => void; onLock: () => void; onUnlockEditing: () => void; onLockEditing: () => void; onChangePin: () => void; onCheckLocalUpdate: () => void; onInstallLocalUpdate: () => void; localUpdatePhase: LocalUpdatePhase; updateStatus: import("./types").SoftwareUpdateStatus | null; lastUpdateCheckAt: string | null; pendingSpreadsheetPaths: string[]; onConsumeSpreadsheetPaths: () => void; onBeginCreateVault: () => void; onOpenVault: () => void; onSwitchVault: (path: string) => Promise<void>; onOpenSearchVault: (path: string, bookId: string, entryId?: string | null, completedForm?: HTMLElement | null) => Promise<void>; onBookSelectionChange: (bookId: string | null) => void; onTabChange: (tab: Tab) => void; onVaultActivity: (book?: Pick<GiftBook, "id" | "title">) => void; onVaultUpdated: (vault: VaultInfo, previousPath?: string) => void }) {
   const api = useVaultApi(vault.path);
   const client = useQueryClient();
   const [activeBookId, setActiveBookId] = useState<string | null>(initialBookId);
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const [bookModal, setBookModal] = useState(false);
   const [bookToClose, setBookToClose] = useState<GiftBook | null>(null);
+  const [vaultToClose, setVaultToClose] = useState<{ path: string; name: string } | null>(null);
   const [search, setSearch] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const searchWrapRef = useRef<HTMLDivElement>(null);
@@ -1136,15 +1185,15 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
   const exportVault = async () => {
     try { const path = await api.exportVault(); onNotice(`已导出完整礼金库：${path}`); } catch (err) { onError(String(err)); }
   };
-  const editVault = async (name: string, notes: string) => {
+  const editVault = async (name: string, notes: string, path: string) => {
     setVaultEditSaving(true); setVaultEditError(null);
     try {
-      const updated = await api.editVault(name, notes);
+      const updated = await api.editVault(name, notes, path);
       await invalidateVaultQueries(client, vault.path);
       if (!api.isCurrent()) return;
-      onVaultUpdated(updated);
+      onVaultUpdated(updated, vault.path);
       setVaultEditOpen(false);
-      onNotice("礼金库信息已更新");
+      onNotice(path === vault.path ? "礼金库信息已更新" : "礼金库已移动并更新信息");
     } catch (err) {
       setVaultEditError(err); onError(String(err));
     } finally {
@@ -1321,16 +1370,15 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
     <div className="app-shell" onPointerDown={() => activityRef.current()} onKeyDown={() => activityRef.current()}>
       <header className="topbar">
         <div className="topbar-brand"><div className="brand-mark small"><BookOpen size={17} /></div><strong>礼金簿管理</strong><span className="slash">/</span><span className="vault-label">{activeBook?.title ?? vault.name}</span></div>
-          <div className="topbar-actions"><div className="global-search-wrap" ref={searchWrapRef}><label className="tag-search-field" aria-label="全库搜索"><Search size={16} /><input id="vault-global-search" value={search} onFocus={() => setSearchOpen(true)} onChange={(event) => { const value = event.target.value; setSearch(value); setSearchOpen(Boolean(value.trim())); }} placeholder="搜索姓名、金额、地址、标签等" /></label>{searchOpen && search.trim() && <SearchResults result={searchResults.data} isLoading={searchResults.isPending || search.trim() !== debouncedSearch.trim()} isError={searchResults.isError} onRetry={() => void searchResults.refetch()} onSelect={openSearchHit} />}</div><div className="file-info-wrap" ref={fileInfoWrapRef}><button className="offline-pill button-reset" onClick={() => setFileInfoOpen((open) => !open)}><span className="status-dot" />{isAdmin ? "管理员模式" : "用户模式"}</button>{fileInfoOpen && <div className="file-info-popover"><strong>{vault.name}</strong>{vault.notes && <span className="file-info-notes">{vault.notes}</span>}<span className="file-path">{vault.path}</span><span className={`role-badge ${isAdmin ? "admin" : "viewer"}`}>{isAdmin ? "管理员模式" : "用户模式"}</span><div className="popover-actions">{isAdmin && <button aria-pressed={continuousRegistration} className={`secondary-button compact continuous-registration-button ${continuousRegistration ? "active" : ""}`} disabled={!canEdit} data-operation-hint={!canEdit ? "提示：请先解锁编辑，再开始持续登记。" : continuousRegistration ? "提示：持续登记已开启，保存后会自动进入下一条；点击可关闭。" : "提示：点击开启持续登记，保存后会自动进入下一条。"} onClick={() => onContinuousRegistrationChange(!continuousRegistration)}>{continuousRegistration ? <Unlock size={14} /> : <LockKeyhole size={14} />}{continuousRegistration ? "持续登记：已开启" : "持续登记：已关闭"}</button>}{isAdmin ? <button className="secondary-button compact" title="切换到用户模式" onClick={onLock}><LockKeyhole size={14} />切换模式</button> : <button className="primary-button compact" onClick={onUnlock}><Unlock size={14} />解锁管理</button>}<button className="secondary-button compact" title="返回启动页" onClick={onClose}><ArrowLeft size={15} />返回启动页</button></div></div>}</div>{activeTab !== "entries" && <button className="secondary-button compact return-detail-button topbar-return-detail" title="返回明细" onClick={() => selectTab("entries")}><ArrowLeft size={15} />返回明细</button>}</div>
+          <div className="topbar-actions"><div className="global-search-wrap" ref={searchWrapRef}><label className="tag-search-field" aria-label="全库搜索"><Search size={16} /><input id="vault-global-search" value={search} onFocus={() => setSearchOpen(true)} onChange={(event) => { const value = event.target.value; setSearch(value); setSearchOpen(Boolean(value.trim())); }} placeholder="搜索姓名、金额、地址、标签等" /></label>{searchOpen && search.trim() && <SearchResults result={searchResults.data} isLoading={searchResults.isPending || search.trim() !== debouncedSearch.trim()} isError={searchResults.isError} onRetry={() => void searchResults.refetch()} onSelect={openSearchHit} />}</div><div className="file-info-wrap" ref={fileInfoWrapRef}><button className="offline-pill button-reset" onClick={() => setFileInfoOpen((open) => !open)}><span className="status-dot" />{isAdmin ? "管理员模式" : "用户模式"}</button>{fileInfoOpen && <div className="file-info-popover"><strong>{vault.name}</strong>{vault.notes && <span className="file-info-notes">{vault.notes}</span>}<span className={`role-badge ${isAdmin ? "admin" : "viewer"}`}>{isAdmin ? "管理员模式" : "用户模式"}</span><div className="popover-actions">{isAdmin && <button aria-pressed={continuousRegistration} className={`secondary-button compact continuous-registration-button ${continuousRegistration ? "active" : ""}`} disabled={!canEdit} data-operation-hint={!canEdit ? "提示：请先解锁编辑，再开始持续登记。" : continuousRegistration ? "提示：持续登记已开启，保存后会自动进入下一条；点击可关闭。" : "提示：点击开启持续登记，保存后会自动进入下一条。"} onClick={() => onContinuousRegistrationChange(!continuousRegistration)}>{continuousRegistration ? <Unlock size={14} /> : <LockKeyhole size={14} />}{continuousRegistration ? "持续登记：已开启" : "持续登记：已关闭"}</button>}{isAdmin ? <button className="secondary-button compact" title="切换到用户模式" onClick={onLock}><LockKeyhole size={14} />切换模式</button> : <button className="primary-button compact" onClick={onUnlock}><Unlock size={14} />解锁管理</button>}<button className="secondary-button compact" title="返回启动页" onClick={onClose}><ArrowLeft size={15} />返回启动页</button></div></div>}</div>{activeTab !== "entries" && <button className="secondary-button compact return-detail-button topbar-return-detail" title="返回明细" onClick={() => selectTab("entries")}><ArrowLeft size={15} />返回明细</button>}</div>
       </header>
       <nav className="opened-vault-tabs" aria-label="已打开礼金库">
         <div className="opened-vault-tabs-list">
-          {openedVaults.map((item) => <OpenedVaultTab item={item} active={vaultPathKey(item.vault.path) === vaultPathKey(vault.path)} dragged={vaultPathKey(item.vault.path) === vaultPathKey(draggedVaultPath ?? "")} dropTarget={vaultPathKey(item.vault.path) === vaultPathKey(vaultDropTargetPath ?? "") && vaultPathKey(item.vault.path) !== vaultPathKey(draggedVaultPath ?? "")} key={vaultPathKey(item.vault.path)} onSwitch={onSwitchVault} onClose={onCloseVault} onDragState={handleVaultDragState} onDrop={() => handleVaultDragState(null, null)} />)}
+          {openedVaults.map((item) => <OpenedVaultTab item={item} active={vaultPathKey(item.vault.path) === vaultPathKey(vault.path)} canEdit={canEdit} dragged={vaultPathKey(item.vault.path) === vaultPathKey(draggedVaultPath ?? "")} dropTarget={vaultPathKey(item.vault.path) === vaultPathKey(vaultDropTargetPath ?? "") && vaultPathKey(item.vault.path) !== vaultPathKey(draggedVaultPath ?? "")} key={vaultPathKey(item.vault.path)} onSwitch={onSwitchVault} onClose={(path) => setVaultToClose({ path, name: item.vault.name })} onEdit={() => setVaultEditOpen(true)} onDragState={handleVaultDragState} onDrop={() => handleVaultDragState(null, null)} />)}
         </div>
       </nav>
       <div className="workspace">
         <aside className="sidebar">
-          <div className="sidebar-heading"><span>礼金簿管理</span></div>
           {isAdmin && <button className="sidebar-create" onClick={onBeginCreateVault}><Archive size={16} />新建礼金库</button>}
           <button className="sidebar-create sidebar-open" onClick={onOpenVault}><FolderOpen size={16} />打开礼金库</button>
           <button className="sidebar-create sidebar-book-create" disabled={!canEdit} title={isAdmin && !canEdit ? "请先解锁编辑" : undefined} onClick={() => setBookModal(true)}><CirclePlus size={16} />新建礼金簿</button>
@@ -1346,7 +1394,7 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
         <main className="content-area">
           {activeTab === "settings" ? <div className="content-view settings"><SettingsView session={session} onUnlock={onUnlock} onUnlockEditing={onUnlockEditing} onLockEditing={onLockEditing} onChangePin={onChangePin} onCheckUpdate={() => onCheckLocalUpdate()} onInstallUpdate={onInstallLocalUpdate} updatePhase={localUpdatePhase} updateStatus={updateStatus} lastUpdateCheckAt={lastUpdateCheckAt} onNotice={onNotice} onError={onError} /></div> : activeTab === "trash" && !activeBook ? <div className="content-view trash"><TrashView scopeDescription={openedVaults.map((item) => `${item.vault.name}（${item.vault.path}）`).join("、")} openedVaultPaths={openedVaults.map((item) => item.vault.path)} vaultPath={vault.path} onNotice={onNotice} isAdmin={canEdit} onVaultActivity={onVaultActivity} /></div> : !activeBook && activeTab === "compare" ? <div className="content-view compare"><CompareViewPanel vaultPath={vault.path} onNotice={onNotice} canEdit={canEdit} bookOrder={bookOrder} /></div> : !activeBook && activeTab === "returnGifts" ? <div className="content-view returnGifts"><ReturnGiftsView vaultPath={vault.path} isAdmin={canEdit} onError={onError} onVaultActivity={onVaultActivity} onTrace={traceSource} /></div> : !activeBook && activeTab === "history" ? <div className="content-view history"><HistoryView vaultPath={vault.path} vaultName={vault.name} isAdmin={canEdit} onNotice={onNotice} onVaultUpdated={onVaultUpdated} onTrace={traceSource} /></div> : activeBook ? (
              <>
-               {showBookNavigation && <><div className="content-heading"><div><h2>{activeBook.title}{canEdit && <button className="icon-button subtle book-title-edit" data-operation-hint="提示：仅修改礼金簿名称、活动信息和备注。" type="button" title="编辑礼金簿" aria-label="编辑礼金簿" onClick={() => { if (canLeaveWorkspace()) setBookEditTarget({ ...activeBook }); }}><Pencil size={16} /></button>}</h2><BookMetadata book={activeBook} vaultPath={vault.path} /></div><div className="heading-actions" /></div>
+               {showBookNavigation && <><div className="content-heading"><div><h2>{activeBook.title}{canEdit && <button className="icon-button subtle book-title-edit" data-operation-hint="提示：仅修改礼金簿名称、活动信息和备注。" type="button" title="编辑礼金簿" aria-label="编辑礼金簿" onClick={() => { if (canLeaveWorkspace()) setBookEditTarget({ ...activeBook }); }}><Pencil size={16} /></button>}</h2><BookMetadata book={activeBook} /></div><div className="heading-actions" /></div>
                <nav className="tab-bar"><button className={activeTab === "entries" ? "active" : ""} onClick={() => selectTab("entries")}><LayoutDashboard size={16} />礼金明细</button><button className={activeTab === "people" ? "active" : ""} onClick={() => selectTab("people")}><UsersRound size={16} />人物与标签</button><button className={activeTab === "compare" ? "active" : ""} onClick={() => selectTab("compare")}><BarChart3 size={16} />跨簿比较</button></nav></>}
               <div className={`content-view ${activeTab}`}>
                 {activeTab === "trash" && <TrashView scopeDescription={openedVaults.map((item) => `${item.vault.name}（${item.vault.path}）`).join("、")} openedVaultPaths={openedVaults.map((item) => item.vault.path)} vaultPath={vault.path} onNotice={onNotice} isAdmin={canEdit} onVaultActivity={onVaultActivity} />}
@@ -1361,9 +1409,10 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
         </main>
       </div>
       {bookModal && <BookModal error={createBook.error} onClose={() => setBookModal(false)} onSubmit={(input) => createBook.mutate(input)} isSaving={createBook.isPending} />}
-      {vaultEditOpen && <VaultMetadataModal error={vaultEditError} vault={vault} isSaving={vaultEditSaving} onClose={() => setVaultEditOpen(false)} onSubmit={editVault} />}
+      {vaultEditOpen && <VaultMetadataModal error={vaultEditError} vault={vault} isSaving={vaultEditSaving} onClose={() => setVaultEditOpen(false)} onSubmit={editVault} onChoosePath={() => api.chooseVaultPath("save", vault.path.split(/[\\/]/).pop() || suggestedVaultFileName(vault.name))} />}
       {bookEditTarget && <BookMetadataModal key={bookEditTarget.id} error={bookEditError} book={bookEditTarget} isSaving={bookEditSaving} onClose={() => setBookEditTarget(null)} onSubmit={editBook} />}
       {bookToClose && <ConfirmBookClose book={bookToClose} onClose={() => setBookToClose(null)} onConfirm={confirmCloseBook} />}
+      {vaultToClose && <ConfirmVaultClose vault={vaultToClose} onClose={() => setVaultToClose(null)} onConfirm={() => { const closingVault = vaultToClose; setVaultToClose(null); void onCloseVault(closingVault.path); }} />}
       {spreadsheetImportOpen && <SpreadsheetBatchModal error={importError} targetQuery={openedVaultBooks} paths={spreadsheetPaths} books={openedVaultBooks.data ?? []} vaults={openedVaults.map((item) => item.vault)} activeVaultPath={vault.path} activeBookId={activeBookId} isImporting={spreadsheetImporting} importPhase={spreadsheetImportPhase} onClose={() => { setSpreadsheetImportOpen(false); setSpreadsheetPaths([]); }} onChooseMore={async () => { try { const paths = await api.chooseSpreadsheetPaths(); const vaultCount = paths.filter((path) => path.toLocaleLowerCase().endsWith(".giftvault")).length; if (vaultCount) onNotice(`已跳过 ${vaultCount} 个礼金库文件，请使用“打开礼金库”切换礼金库`); return paths.filter((path) => !path.toLocaleLowerCase().endsWith(".giftvault")); } catch (err) { onError(String(err)); return []; } }} onImport={async (items) => { setImportError(null); setSpreadsheetImporting(true); setSpreadsheetImportPhase("正在写入礼金簿"); try { const result = await api.importSpreadsheets(items); setSpreadsheetImportPhase("正在刷新页面数据"); await Promise.all(uniquePaths(items.map((item) => item.targetVaultPath || vault.path)).map((path) => invalidateVaultQueries(client, path))); if (!api.isCurrent()) return; const completedForm = document.querySelector<HTMLElement>('[data-modal-owner="spreadsheet-import"]'); setSpreadsheetImportOpen(false); setSpreadsheetPaths([]); if (!canLeaveWorkspace(completedForm)) { onNotice(`已导入 ${result.imported} 条记录，当前草稿仍保留；请完成当前操作后打开导入目标。`); return; } if (result.books[0]) { if (items[0]?.targetVaultPath && vaultPathKey(items[0].targetVaultPath) !== vaultPathKey(vault.path)) await onOpenSearchVault(items[0].targetVaultPath, result.books[0].book.id, null, completedForm); else { setActiveBookId(result.books[0].book.id); setActiveTab("entries"); onVaultActivity(); } } onNotice(result.skippedRows.length ? `已导入 ${result.imported} 条记录；跳过 ${result.skippedRows.length} 行。${result.skippedRows.slice(0, 3).join("；")}${result.skippedRows.length > 3 ? "；其余异常请在导入预览中查看" : ""}` : `已从 ${result.books.length} 个文件导入 ${result.imported} 条记录`); } catch (err) { setImportError(err); onError(String(err)); } finally { setSpreadsheetImporting(false); setSpreadsheetImportPhase("正在准备导入"); } }} />}
     </div>
   );
@@ -2144,6 +2193,10 @@ function ConfirmEntryDelete({ entry, onClose, onConfirm }: { entry: GiftEntry; o
 
 function ConfirmBookClose({ book, onClose, onConfirm }: { book: GiftBook; onClose: () => void; onConfirm: () => void }) {
   return <Modal title="关闭礼金簿" className="confirm-action-modal" onClose={onClose}><p className="confirm-action-copy">确定关闭“{book.title}”？</p><p className="field-hint">礼金簿只会从当前工作区隐藏，不会删除礼金簿文件或其中的数据。之后可点击“已关闭礼金簿”重新显示。</p><div className="modal-actions"><button className="secondary-button confirm-cancel-button" onClick={onClose}>取消</button><button className="primary-button confirm-accept-button" onClick={onConfirm}>确定关闭</button></div></Modal>;
+}
+
+function ConfirmVaultClose({ vault, onClose, onConfirm }: { vault: { path: string; name: string }; onClose: () => void; onConfirm: () => void }) {
+  return <Modal title="关闭礼金库" className="confirm-action-modal" onClose={onClose}><p className="confirm-action-copy">确定关闭“{vault.name}”？</p><p className="field-hint">礼金库只会从当前工作区隐藏，不会删除 `.giftvault` 文件或其中的数据。之后可通过“打开礼金库”重新打开。</p><div className="modal-actions"><button className="secondary-button confirm-cancel-button" onClick={onClose}>取消</button><button className="primary-button confirm-accept-button" onClick={onConfirm}>确定关闭</button></div></Modal>;
 }
 
 function ConfirmHistoryClear({ selectedCount, isClearing, error, onClose, onConfirm }: { selectedCount: number; isClearing: boolean; error?: unknown; onClose: () => void; onConfirm: (pin: string) => void }) {

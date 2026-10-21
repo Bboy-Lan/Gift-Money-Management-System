@@ -82,7 +82,7 @@ test("gift-book editing is independent from vault editing and preserves source m
 
   assert.match(app, /编辑礼金库/);
   assert.match(app, /编辑礼金簿/);
-  assert.match(app, /<BookMetadata book=\{activeBook\} vaultPath=\{vault\.path\} \/>/);
+  assert.match(app, /<BookMetadata book=\{activeBook\} \/>/);
   assert.match(api, /editBook: \(bookId: string, input:/);
   assert.match(api, /invoke<GiftBook>\("edit_book"/);
   assert.match(rust, /fn edit_book\(/);
@@ -136,7 +136,7 @@ test("vault metadata editing and complete export use vault-level commands", asyn
 
   assert.match(models, /pub notes: Option<String>/);
   assert.match(app, /编辑礼金库/);
-  assert.match(app, /api\.editVault\(name, notes\)/);
+  assert.match(app, /api\.editVault\(name, notes, path\)/);
   assert.match(app, /api\.exportVault\(\)/);
   assert.match(app, /<Archive size=\{15\} \/>导出库/);
   assert.doesNotMatch(app, /onClick=\{\(\) => entries\.refetch\(\)\}><RefreshCw/);

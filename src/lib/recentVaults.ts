@@ -102,3 +102,17 @@ export function forgetRecentVaultPath(path: string, storage?: Storage): RecentVa
   }
   return next;
 }
+
+export function replaceRecentVaultPath(previousPath: string, nextPath: string, storage?: Storage): RecentVault[] {
+  const target = getStorage(storage);
+  const previousKey = recentVaultPathKey(previousPath);
+  const next = readRecentVaults(target ?? undefined).map((item) => (
+    recentVaultPathKey(item.path) === previousKey ? { ...item, path: nextPath } : item
+  ));
+  try {
+    target?.setItem(STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    // Local history is optional.
+  }
+  return next;
+}

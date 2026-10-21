@@ -85,3 +85,11 @@ export function rememberOpenedVaultSessions(sessions: readonly OpenedVaultSessio
   }
   return next;
 }
+
+export function replaceOpenedVaultSessionPath(previousPath: string, nextPath: string, storage?: Storage) {
+  const previousKey = pathKey(previousPath);
+  const sessions = readOpenedVaultSessions(storage).map((session) => (
+    pathKey(session.path) === previousKey ? { ...session, path: nextPath } : session
+  ));
+  return rememberOpenedVaultSessions(sessions, nextPath, storage);
+}
