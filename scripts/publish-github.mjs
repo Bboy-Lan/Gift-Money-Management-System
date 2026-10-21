@@ -6,17 +6,19 @@ import { createReadStream } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { repository, releaseInstallerName, verifyUpdateSignature } from "./update-manifest.mjs";
-import { assertBoundDirectory } from "./release-preparation.mjs";
+import { assertReleaseDirectory, releasePaths } from "./release-preparation.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const { version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
-const directory = join(root, "release", version);
+const release = releasePaths(root, version);
+const directory = release.destination;
+await assertReleaseDirectory(release, directory);
 const installer = `礼金簿_${version}_x64-setup.exe`;
 const filenames = [installer, installer + ".sig", "latest.json", "RELEASE_NOTES.md", "SHA256SUMS.txt", "README.md"];
 const assets = [];
 for (const name of filenames) {
   const path = join(directory, name);
-  await assertBoundDirectory(root, path);
+  await assertReleaseDirectory(release, path);
   const bytes = await readFile(path);
   const sourceName = name === installer || name === installer + ".sig" ? installer : undefined;
   const uploadName = sourceName ? releaseInstallerName(version) + name.slice(sourceName.length) : name;

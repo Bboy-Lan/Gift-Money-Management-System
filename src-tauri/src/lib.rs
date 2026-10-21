@@ -25,7 +25,7 @@ mod update_security;
 use app_security::{validate_pin, AppSecurityStore};
 use models::*;
 
-const CURRENT_SCHEMA: i32 = 8;
+const CURRENT_SCHEMA: i32 = 9;
 
 static WRITE_OPERATION: Mutex<()> = Mutex::new(());
 
@@ -232,19 +232,11 @@ fn license_text() -> String {
     include_str!("../../LICENSE").to_string()
 }
 
-fn published_update_directory(_app: &tauri::AppHandle) -> PathBuf {
-    // Bound to this executable's distribution, never an original Desktop release.
-    std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-        .map(|directory| {
-            if directory.file_name().is_some_and(|name| name == "release") {
-                directory
-            } else {
-                directory.join("release")
-            }
-        })
-        .unwrap_or_else(|| app_profile_directory().join("release"))
+fn published_update_directory(app: &tauri::AppHandle) -> PathBuf {
+    desktop_directory(app)
+        .unwrap_or_else(|| PathBuf::from(r"D:\Desktop"))
+        .join("礼金簿—改动")
+        .join("release")
 }
 
 fn ensure_published_update_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -307,6 +299,21 @@ fn candidate_from_path(path: &Path) -> Option<LocalUpdateCandidate> {
     })
 }
 
+#[cfg(test)]
+fn latest_local_update(
+    candidates: &[PathBuf],
+    current_version: &str,
+) -> Option<LocalUpdateCandidate> {
+    let current = parse_release_version(current_version)?;
+    candidates
+        .iter()
+        .filter_map(|path| candidate_from_path(path))
+        .filter(|candidate| {
+            parse_release_version(&candidate.version).is_some_and(|version| version > current)
+        })
+        .max_by_key(|candidate| parse_release_version(&candidate.version))
+}
+
 fn candidate_from_github_release(
     release: &GithubRelease,
 ) -> Result<Option<LocalUpdateCandidate>, String> {
@@ -332,17 +339,6 @@ fn candidate_from_github_release(
     }))
 }
 
-fn latest_local_update(paths: &[PathBuf], current_version: &str) -> Option<LocalUpdateCandidate> {
-    let current = parse_release_version(current_version)?;
-    paths
-        .iter()
-        .filter_map(|path| candidate_from_path(path))
-        .filter(|candidate| {
-            parse_release_version(&candidate.version).is_some_and(|version| version > current)
-        })
-        .max_by_key(|candidate| parse_release_version(&candidate.version))
-}
-
 fn local_update_candidate(
     app: &tauri::AppHandle,
 ) -> Result<Option<(LocalUpdateCandidate, PathBuf)>, String> {
@@ -350,24 +346,40 @@ fn local_update_candidate(
     let paths = std::fs::read_dir(&directory)
         .map_err(|e| e.to_string())?
         .filter_map(Result::ok)
-        .filter_map(|entry| {
-            entry
-                .file_type()
+        .flat_map(|entry| match entry.file_type() {
+            Ok(kind) if kind.is_file() => vec![entry.path()],
+            Ok(kind) if kind.is_dir() => std::fs::read_dir(entry.path())
                 .ok()
-                .filter(|kind| kind.is_file())
-                .map(|_| entry.path())
+                .into_iter()
+                .flatten()
+                .filter_map(Result::ok)
+                .filter_map(|child| {
+                    child
+                        .file_type()
+                        .ok()
+                        .filter(|kind| kind.is_file())
+                        .map(|_| child.path())
+                })
+                .collect(),
+            _ => Vec::new(),
         })
         .collect::<Vec<_>>();
-    let mut candidate = latest_local_update(&paths, APP_VERSION);
-    if let Some(candidate) = candidate.as_mut() {
-        candidate.release_notes = std::fs::read_to_string(directory.join("RELEASE_NOTES.md"))
-            .or_else(|_| std::fs::read_to_string(directory.join("CHANGELOG.md")))
+    let mut selected = paths
+        .into_iter()
+        .filter_map(|path| candidate_from_path(&path).map(|candidate| (candidate, path)))
+        .filter(|(candidate, _)| {
+            parse_release_version(&candidate.version)
+                .zip(parse_release_version(APP_VERSION))
+                .is_some_and(|(version, current)| version > current)
+        })
+        .max_by_key(|(candidate, _)| parse_release_version(&candidate.version));
+    if let Some((candidate, path)) = selected.as_mut() {
+        let parent = path.parent().unwrap_or(&directory);
+        candidate.release_notes = std::fs::read_to_string(parent.join("RELEASE_NOTES.md"))
+            .or_else(|_| std::fs::read_to_string(parent.join("CHANGELOG.md")))
             .ok();
     }
-    Ok(candidate.map(|candidate| {
-        let path = directory.join(&candidate.file_name);
-        (candidate, path)
-    }))
+    Ok(selected)
 }
 
 fn update_http_client(total: Duration) -> Result<reqwest::Client, String> {
@@ -601,6 +613,23 @@ fn migrate(connection: &Connection) -> Result<(), String> {
         connection
             .execute_batch("PRAGMA user_version = 8;")
             .map_err(|e| e.to_string())?;
+    }
+    if version < 9 || !table_exists(connection, "outbound_gifts")? {
+        connection.execute_batch(
+            "CREATE TABLE IF NOT EXISTS outbound_gifts (
+               id TEXT PRIMARY KEY NOT NULL,
+               person_name TEXT NOT NULL,
+               amount_fen INTEGER NOT NULL CHECK (amount_fen > 0),
+               given_at TEXT NOT NULL,
+               note TEXT,
+               tag_snapshot TEXT NOT NULL DEFAULT '[]',
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL,
+               deleted_at TEXT
+             );
+             CREATE INDEX IF NOT EXISTS idx_outbound_gifts_active ON outbound_gifts(deleted_at, given_at);
+             PRAGMA user_version = 9;",
+        ).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -5369,6 +5398,224 @@ fn list_return_gifts_from_connection(
     Ok(records)
 }
 
+fn outbound_tag_names(connection: &Connection, raw: &str) -> (Vec<String>, Vec<String>) {
+    let tags = serde_json::from_str::<Vec<String>>(raw).unwrap_or_default();
+    let names = tags
+        .iter()
+        .filter_map(|id| {
+            connection
+                .query_row(
+                    "SELECT name FROM tags WHERE id = ? AND deleted_at IS NULL",
+                    params![id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+        })
+        .collect();
+    (tags, names)
+}
+
+fn list_outbound_gifts_from_connection(
+    connection: &Connection,
+) -> Result<Vec<OutboundGift>, String> {
+    let mut statement = connection.prepare(
+        "SELECT id, person_name, amount_fen, given_at, note, tag_snapshot FROM outbound_gifts WHERE deleted_at IS NULL ORDER BY given_at DESC, updated_at DESC"
+    ).map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                read_money_fen(row, 2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(5)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+    rows.map(|row| {
+        let (id, person_name, amount_fen, given_at, note, tag_snapshot) =
+            row.map_err(|e| e.to_string())?;
+        let (tags, tag_names) = outbound_tag_names(connection, &tag_snapshot);
+        Ok(OutboundGift {
+            id,
+            person_name,
+            amount_fen,
+            given_at,
+            note,
+            tags,
+            tag_names,
+        })
+    })
+    .collect()
+}
+
+#[tauri::command]
+fn list_outbound_gifts(
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<OutboundGift>, String> {
+    let connection = scoped_read_connection(&state, &vault_path)?;
+    if !table_exists(&connection, "outbound_gifts")? {
+        return Ok(Vec::new());
+    }
+    list_outbound_gifts_from_connection(&connection)
+}
+
+#[tauri::command]
+fn outbound_gift_summary(
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<OutboundGiftSummary, String> {
+    let connection = scoped_read_connection(&state, &vault_path)?;
+    if !table_exists(&connection, "outbound_gifts")? {
+        return Ok(OutboundGiftSummary {
+            gift_count: 0,
+            highest_amount_fen: 0,
+            total_fen: 0,
+        });
+    }
+    connection.query_row(
+        "SELECT COUNT(*), COALESCE(MAX(amount_fen), 0), COALESCE(SUM(amount_fen), 0) FROM outbound_gifts WHERE deleted_at IS NULL", [],
+        |row| Ok(OutboundGiftSummary { gift_count: row.get(0)?, highest_amount_fen: read_money_fen(row, 1)?, total_fen: read_money_fen(row, 2)? })
+    ).map_err(|e| e.to_string())
+}
+
+fn save_outbound_gift(
+    id: Option<String>,
+    input: OutboundGiftInput,
+    vault_path: String,
+    state: &State<'_, AppState>,
+) -> Result<OutboundGift, String> {
+    let _operation = begin_operation()?;
+    if input.person_name.trim().is_empty() {
+        return Err("姓名不能为空".into());
+    }
+    validate_amount(input.amount_fen)?;
+    validate_date(&input.given_at, false)?;
+    validate_text("备注", &input.note, 65536)?;
+    let mut connection = admin_connection(state, &vault_path, "save-outbound-gift", false)?;
+    let transaction = connection.transaction().map_err(|e| e.to_string())?;
+    let now_value = now();
+    let gift_id = id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let tag_snapshot = serde_json::to_string(&input.tag_ids).map_err(|e| e.to_string())?;
+    if transaction
+        .query_row(
+            "SELECT COUNT(*) FROM outbound_gifts WHERE id = ?",
+            params![gift_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|e| e.to_string())?
+        == 0
+    {
+        transaction.execute("INSERT INTO outbound_gifts(id, person_name, amount_fen, given_at, note, tag_snapshot, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", params![gift_id, input.person_name.trim(), input.amount_fen, input.given_at, null_if_empty(&input.note), tag_snapshot, now_value, now_value]).map_err(|e| e.to_string())?;
+        write_audit_detail(
+            &transaction,
+            "create",
+            "outbound_gift",
+            &gift_id,
+            AuditPayload {
+                person_id: None,
+                target: input.person_name.trim().into(),
+                book_title: None,
+                description: "登记我的随礼".into(),
+                changes: Vec::new(),
+            },
+        )?;
+    } else {
+        let changed = transaction.execute("UPDATE outbound_gifts SET person_name=?, amount_fen=?, given_at=?, note=?, tag_snapshot=?, updated_at=? WHERE id=? AND deleted_at IS NULL", params![input.person_name.trim(), input.amount_fen, input.given_at, null_if_empty(&input.note), tag_snapshot, now_value, gift_id]).map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err("随礼记录不存在或已删除".into());
+        }
+        write_audit_detail(
+            &transaction,
+            "update",
+            "outbound_gift",
+            &gift_id,
+            AuditPayload {
+                person_id: None,
+                target: input.person_name.trim().into(),
+                book_title: None,
+                description: "编辑我的随礼".into(),
+                changes: Vec::new(),
+            },
+        )?;
+    }
+    transaction.commit().map_err(|e| e.to_string())?;
+    let (tags, tag_names) = outbound_tag_names(
+        &connection,
+        &serde_json::to_string(&input.tag_ids).unwrap_or_default(),
+    );
+    Ok(OutboundGift {
+        id: gift_id,
+        person_name: input.person_name.trim().into(),
+        amount_fen: input.amount_fen,
+        given_at: input.given_at,
+        note: null_if_empty(&input.note),
+        tags,
+        tag_names,
+    })
+}
+
+#[tauri::command(async)]
+fn create_outbound_gift(
+    input: OutboundGiftInput,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<OutboundGift, String> {
+    save_outbound_gift(None, input, vault_path, &state)
+}
+
+#[tauri::command(async)]
+fn update_outbound_gift(
+    id: String,
+    input: OutboundGiftInput,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<OutboundGift, String> {
+    save_outbound_gift(Some(id), input, vault_path, &state)
+}
+
+#[tauri::command(async)]
+fn delete_outbound_gift(
+    id: String,
+    vault_path: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let _operation = begin_operation()?;
+    let mut connection = admin_connection(&state, &vault_path, "delete-outbound-gift", false)?;
+    let transaction = connection.transaction().map_err(|e| e.to_string())?;
+    let target: String = transaction
+        .query_row(
+            "SELECT person_name FROM outbound_gifts WHERE id=? AND deleted_at IS NULL",
+            params![id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or("随礼记录不存在或已删除")?;
+    let changed = transaction.execute("UPDATE outbound_gifts SET deleted_at=?, updated_at=? WHERE id=? AND deleted_at IS NULL", params![now(), now(), id]).map_err(|e| e.to_string())?;
+    if changed == 0 {
+        return Err("随礼记录不存在或已删除".into());
+    }
+    write_audit_detail(
+        &transaction,
+        "delete",
+        "outbound_gift",
+        &id,
+        AuditPayload {
+            person_id: None,
+            target,
+            book_title: None,
+            description: "将随礼记录移入回收站".into(),
+            changes: Vec::new(),
+        },
+    )?;
+    transaction.commit().map_err(|e| e.to_string())
+}
+
 #[tauri::command(async)]
 fn update_return_gift_information(
     entry_id: String,
@@ -6103,6 +6350,25 @@ fn list_trash_from_connection(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?,
     );
+    if table_exists(connection, "outbound_gifts")? {
+        let mut gifts = connection.prepare("SELECT id, person_name, deleted_at FROM outbound_gifts WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC").map_err(|e| e.to_string())?;
+        let rows = gifts
+            .query_map([], |row| {
+                Ok(TrashItem {
+                    id: row.get(0)?,
+                    kind: "outbound_gift".to_string(),
+                    vault_path: vault_path.map(displayable_path),
+                    title: row.get(1)?,
+                    book_title: "我的随礼".to_string(),
+                    deleted_at: row.get(2)?,
+                })
+            })
+            .map_err(|e| e.to_string())?;
+        items.extend(
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?,
+        );
+    }
     let mut tags = connection
         .prepare("SELECT id, name, deleted_at FROM tags WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC")
         .map_err(|e| e.to_string())?;
@@ -6187,7 +6453,7 @@ fn list_audit_logs_from_connection(connection: &Connection) -> Result<Vec<AuditL
         .prepare(
             "SELECT id, action, entity_type, entity_id, payload, created_at
              FROM audit_logs
-             WHERE ((entity_type IN ('gift_entry', 'return_gift') AND action IN ('update', 'delete', 'restore'))
+             WHERE ((entity_type IN ('gift_entry', 'return_gift', 'outbound_gift') AND action IN ('update', 'delete', 'restore', 'create'))
                  OR (entity_type = 'person' AND action IN ('update', 'delete', 'restore'))
                  OR (entity_type = 'gift_book' AND action IN ('update', 'delete', 'restore'))
                  OR (entity_type = 'vault' AND action = 'update'))
@@ -7088,7 +7354,7 @@ fn restore_trash_item(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     with_operation(|| match kind.as_str() {
-        "book" | "entry" | "tag" | "person" => {
+        "book" | "entry" | "tag" | "person" | "outbound_gift" => {
             let requested_path = vault_path
                 .as_deref()
                 .filter(|path| !path.trim().is_empty())
@@ -7104,6 +7370,10 @@ fn restore_trash_item(
                 "entry" => restore_entry_record(&mut connection, &id),
                 "tag" => restore_tag_record(&mut connection, &id),
                 "person" => restore_person_record(&mut connection, &id),
+                "outbound_gift" => {
+                    connection.execute("UPDATE outbound_gifts SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL", params![now(), id]).map_err(|e| e.to_string())?;
+                    Ok(())
+                }
                 _ => unreachable!(),
             }
         }
@@ -7129,6 +7399,14 @@ fn empty_trash_records(connection: &mut Connection) -> Result<(), String> {
     transaction
         .execute("DELETE FROM tags WHERE deleted_at IS NOT NULL", [])
         .map_err(|e| e.to_string())?;
+    if table_exists(&transaction, "outbound_gifts")? {
+        transaction
+            .execute(
+                "DELETE FROM outbound_gifts WHERE deleted_at IS NOT NULL",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+    }
     write_audit_detail(
         &transaction,
         "purge",
@@ -8423,6 +8701,11 @@ pub fn run() {
             restore_book,
             list_entries,
             list_return_gifts,
+            list_outbound_gifts,
+            outbound_gift_summary,
+            create_outbound_gift,
+            update_outbound_gift,
+            delete_outbound_gift,
             search_vault,
             create_entry,
             update_entry,

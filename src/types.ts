@@ -1,4 +1,4 @@
-export type Tab = "entries" | "people" | "compare" | "returnGifts" | "history" | "trash" | "settings";
+export type Tab = "entries" | "outboundGifts" | "people" | "compare" | "returnGifts" | "history" | "trash" | "settings";
 
 export interface VaultInfo {
   path: string;
@@ -133,6 +133,22 @@ export interface ReturnGiftRecord {
   returnGiftedAt: string;
   returnGift: string | null;
   tags: Tag[];
+}
+
+export interface OutboundGift {
+  id: string;
+  personName: string;
+  amountFen: number;
+  givenAt: string;
+  note: string | null;
+  tags: string[];
+  tagNames: string[];
+}
+
+export interface OutboundGiftSummary {
+  giftCount: number;
+  highestAmountFen: number;
+  totalFen: number;
 }
 
 export interface Person {

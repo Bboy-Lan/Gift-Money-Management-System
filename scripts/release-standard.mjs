@@ -3,7 +3,7 @@ import { lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildStandardInstaller } from "./build-installers.mjs";
-import { assertBoundDirectory, isolatedBuildEnv, prepareRelease, releasePaths } from "./release-preparation.mjs";
+import { assertBoundDirectory, assertReleaseDirectory, isolatedBuildEnv, prepareRelease, releasePaths } from "./release-preparation.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
@@ -14,7 +14,7 @@ const paths = releasePaths(root, version);
 if (config.version !== version || !cargo.includes(`version = "${version}"`)) throw new Error("Versions must match.");
 if (config.bundle.windows.webviewInstallMode.type !== "embedBootstrapper") throw new Error("Standard installer configuration required.");
 await assertBoundDirectory(root, paths.target);
-await assertBoundDirectory(root, paths.destination);
+await assertReleaseDirectory(paths, paths.destination);
 try { await lstat(paths.destination); throw new Error("Refusing existing release directory; no overwrite."); }
 catch (error) { if (error.code !== "ENOENT") throw error; }
 const changelog = await readFile(join(root, "CHANGELOG.md"), "utf8");
@@ -25,7 +25,7 @@ const end = changelog.indexOf("\n## ", start + marker.length);
 const notes = changelog.slice(start, end < 0 ? undefined : end).trim() + "\n";
 const channels = JSON.parse(await readFile(join(root, "update-channels.json"), "utf8"));
 if (config.plugins.updater.pubkey !== channels.publicKey) throw new Error("Bundler and runtime updater public keys must match.");
-const keyPath = join(root, ".local-signing/lijinbook.key");
+const keyPath = "D:\\Desktop\\礼金簿—改动\\.local-signing\\lijinbook.key";
 if ((await readFile(keyPath + ".pub", "utf8")).trim() !== channels.publicKey) throw new Error("Signing public key does not match the application.");
 const env = { ...isolatedBuildEnv(), CARGO_TARGET_DIR: paths.target, CARGO_NET_OFFLINE: "true", TAURI_SIGNING_PRIVATE_KEY: keyPath, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "", CI: "true" };
 function run(command, args) {

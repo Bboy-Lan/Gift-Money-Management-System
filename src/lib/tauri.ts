@@ -1,18 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Channel } from "@tauri-apps/api/core";
 import type { SoftwareUpdateStatus, UpdateProgress } from "../types";
-import type { AuditLog, BookStat, BookSummary, ComparisonBook, ComparisonBookEntry, ComparisonBookRef, ComparisonPerson, ComparisonPersonHistory, ComparisonPersonRef, GiftBook, GiftEntry, LocalUpdateStatus, Person, PersonHistory, ReturnGiftRecord, SearchResponse, SessionStatus, SettingsStorageInfo, Tag, TrashItem, VaultInfo, VaultOpenResult } from "../types";
+import type { AuditLog, BookStat, BookSummary, ComparisonBook, ComparisonBookEntry, ComparisonBookRef, ComparisonPerson, ComparisonPersonHistory, ComparisonPersonRef, GiftBook, GiftEntry, LocalUpdateStatus, OutboundGift, OutboundGiftSummary, Person, PersonHistory, ReturnGiftRecord, SearchResponse, SessionStatus, SettingsStorageInfo, Tag, TrashItem, VaultInfo, VaultOpenResult } from "../types";
 
 const SCOPED_COMMANDS = new Set([
   "edit_vault", "current_vault_info", "list_books", "create_book", "edit_book", "restore_book",
   "preview_spreadsheet", "preview_spreadsheet_mapping", "import_spreadsheet", "export_book_xlsx", "export_vault",
-  "list_entries", "list_return_gifts", "update_return_gift_information", "search_vault", "create_entry", "update_entry",
+  "list_entries", "list_return_gifts", "list_outbound_gifts", "outbound_gift_summary", "create_outbound_gift", "update_outbound_gift", "delete_outbound_gift", "update_return_gift_information", "search_vault", "create_entry", "update_entry",
   "delete_entry", "restore_entry", "delete_person", "restore_person", "list_audit_logs", "restore_audit_logs", "clear_audit_logs",
   "list_tags", "create_tag", "delete_tag", "update_tag_color", "list_people", "set_person_tags", "list_book_stats", "book_summary", "person_history",
 ]);
 
 const READ_COMMANDS = new Set([
-  "current_vault_info", "list_books", "preview_spreadsheet", "preview_spreadsheet_mapping", "list_entries", "list_return_gifts", "search_vault",
+  "current_vault_info", "list_books", "preview_spreadsheet", "preview_spreadsheet_mapping", "list_entries", "list_return_gifts", "list_outbound_gifts", "outbound_gift_summary", "search_vault",
   "list_audit_logs", "list_tags", "list_people", "list_book_stats", "book_summary", "person_history", "list_books_for_vault", "list_trash",
   "list_comparison_books", "comparison_book_entries", "search_comparison_people", "search_comparison_book_people", "search_comparison_duplicate_book_people", "comparison_person_history",
   "choose_spreadsheet_path", "choose_spreadsheet_paths", "choose_comparison_vault_paths",
@@ -60,6 +60,11 @@ function createApi(invoke: typeof import("@tauri-apps/api/core").invoke) { retur
   restoreBook: (bookId: string) => invoke<void>("restore_book", { bookId }),
   listEntries: (bookId: string, search: string) => invoke<GiftEntry[]>("list_entries", { bookId, search }),
   listReturnGifts: () => invoke<ReturnGiftRecord[]>("list_return_gifts"),
+  listOutboundGifts: () => invoke<OutboundGift[]>("list_outbound_gifts"),
+  outboundGiftSummary: () => invoke<OutboundGiftSummary>("outbound_gift_summary"),
+  createOutboundGift: (input: { personName: string; amountFen: number; givenAt: string; note: string; tagIds: string[] }) => invoke<OutboundGift>("create_outbound_gift", { input }),
+  updateOutboundGift: (id: string, input: { personName: string; amountFen: number; givenAt: string; note: string; tagIds: string[] }) => invoke<OutboundGift>("update_outbound_gift", { id, input }),
+  deleteOutboundGift: (id: string) => invoke<void>("delete_outbound_gift", { id }),
   searchVault: (query: string, vaultPaths: string[]) => invoke<SearchResponse>("search_vault", { query, vaultPaths }),
   createEntry: (input: {
     bookId: string;

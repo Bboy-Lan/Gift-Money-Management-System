@@ -5,7 +5,22 @@ import { createUpdateManifest, releaseInstallerName, localInstallerName, verifyU
 export function releasePaths(root, version) {
   root = resolve(root);
   if (version !== undefined && !/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error("Invalid release version");
-  return { root, target: join(root, "src-tauri/target"), destination: version ? join(root, "release", version) : join(root, "release") };
+  const releaseRoot = root === resolve(process.cwd()) ? "D:\\Desktop\\礼金簿—改动\\release" : join(root, "release");
+  return { root, target: join(root, "src-tauri/target"), releaseRoot, destination: version ? join(releaseRoot, version) : releaseRoot };
+}
+
+export async function assertReleaseDirectory(paths, target) {
+  const root = resolve(paths.releaseRoot);
+  const candidate = resolve(target);
+  const suffix = relative(root, candidate);
+  if (suffix.startsWith("..") || isAbsolute(suffix)) throw new Error("Release path escapes configured release root: " + candidate);
+  let current = candidate;
+  while (true) {
+    try { if ((await lstat(current)).isSymbolicLink()) throw new Error("Linked paths are not allowed: " + current); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+    if (current === root) break;
+    current = dirname(current);
+  }
 }
 
 // A local release must be built from this checkout.  Do not let a caller's
@@ -61,7 +76,7 @@ export async function prepareRelease(root, version, notes, installerDirectory, i
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error("Invalid version");
   const paths = releasePaths(root, version);
   await assertBoundDirectory(paths.root, paths.target);
-  await assertBoundDirectory(paths.root, paths.destination);
+  await assertReleaseDirectory(paths, paths.destination);
   try { await lstat(paths.destination); throw new Error("Refusing existing release directory; archive explicitly before another release (no overwrite)."); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
   const executable = "礼金簿.exe", installer = localInstallerName(version);
@@ -105,7 +120,7 @@ export async function prepareRelease(root, version, notes, installerDirectory, i
     const installers = [[installer, installerBytes, false], ...(offlineBytes ? [[offline, offlineBytes, true]] : [])];
     await writeFile(join(staging, "SHA256SUMS.txt"), hash(exeBytes) + "  " + executable + "\n" + installers.map(([name, bytes, mode]) => hash(bytes) + "  " + name + "\n" + hash(bytes) + "  " + releaseInstallerName(version, mode) + "\n").join(""), { flag: "wx" });
     await assertBoundDirectory(paths.root, staging);
-    await assertBoundDirectory(paths.root, paths.destination);
+    await assertReleaseDirectory(paths, paths.destination);
     await mkdir(dirname(paths.destination), { recursive: true });
     await publishStaging(staging, paths.destination);
     return paths.destination;

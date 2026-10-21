@@ -11,7 +11,7 @@ test("isolated delivery versions, identity, standard release policy and CSP", as
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const config = JSON.parse(await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"));
   const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
-  assert.equal(pkg.version, "0.4.42");
+  assert.equal(pkg.version, "0.4.44");
   assert.equal(config.version, pkg.version);
   assert.ok(cargo.includes(`version = "${pkg.version}"`));
   assert.equal(pkg.devDependencies.jsdom, "26.1.0");
@@ -54,7 +54,7 @@ test("release paths and build environment ignore inherited redirection", () => {
     process.env.TAURI_PROJECT_DIR = "C:/outside";
     process.env.CARGO_BUILD_BUILD_DIR = "C:/outside";
     assert.equal(releasePaths(root).target, join(root, "src-tauri/target"));
-    assert.equal(releasePaths(root).destination, join(root, "release"));
+    assert.equal(releasePaths(root).destination, "D:\\Desktop\\礼金簿—改动\\release");
     const env = isolatedBuildEnv();
     for (const key of ["CARGO_TARGET_DIR", "CARGO_BUILD_BUILD_DIR", "TAURI_CONFIG", "TAURI_PROJECT_DIR"]) assert.equal(env[key], undefined);
   } finally {

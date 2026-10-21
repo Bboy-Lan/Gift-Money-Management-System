@@ -70,6 +70,26 @@ pub struct GiftEntry {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct OutboundGift {
+    pub id: String,
+    pub person_name: String,
+    pub amount_fen: i64,
+    pub given_at: String,
+    pub note: Option<String>,
+    pub tags: Vec<String>,
+    pub tag_names: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboundGiftSummary {
+    pub gift_count: i64,
+    pub highest_amount_fen: i64,
+    pub total_fen: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReturnGiftRecord {
     pub entry_id: String,
     pub book_id: String,
@@ -421,6 +441,16 @@ pub struct UpdateEntryInput {
     pub note: String,
     pub return_gift: String,
     pub return_gift_amount_fen: Option<i64>,
+    pub tag_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutboundGiftInput {
+    pub person_name: String,
+    pub amount_fen: i64,
+    pub given_at: String,
+    pub note: String,
     pub tag_ids: Vec<String>,
 }
 

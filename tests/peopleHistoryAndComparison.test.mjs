@@ -13,7 +13,7 @@ test("person edits keep stable source context and tag-only edits are explicit", 
   assert.match(app, /onChange=\{\(tagIds\) => setPersonTags\.mutate/);
   const personRow = app.slice(app.lastIndexOf("function PersonRow"), app.indexOf("function HistoryView"));
   assert.doesNotMatch(personRow, /person-tag-remove/);
-  assert.match(rust, /WHERE \(\(entity_type IN \('gift_entry', 'return_gift'\)/);
+  assert.match(rust, /WHERE \(\(entity_type IN \('gift_entry', 'return_gift', 'outbound_gift'\)/);
   assert.doesNotMatch(rust, /payload LIKE/);
   assert.match(app, /const restoreAllowed = selectedCount > 0 && selectedRecords\.every\(isRestorableAuditRecord\)/);
   assert.match(app, /disabled=\{!restorableRecords\.length \|\| restoreHistory\.isPending \|\| \(selectedCount > 0 && !restoreAllowed\)\}/);
