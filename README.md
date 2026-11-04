@@ -4,7 +4,7 @@ Windows 本地离线礼金管理桌面程序。它把一个家庭的多本礼金
 
 ## 使用方式
 
-1. 从 [GitHub Releases](https://github.com/Bboy-Lan/Gift-Money-Management-System/releases) 下载标准安装包 `Gift-Money-Management-System_0.4.50_x64-setup.exe`（本地名 `礼金簿_0.4.50_x64-setup.exe`，内容相同）。标准版使用系统 WebView2，缺少时安装器会联网安装运行时。GitHub 附件使用 ASCII 名称，软件名称仍是“礼金簿”。
+1. 从 [GitHub Releases](https://github.com/Bboy-Lan/Gift-Money-Management-System/releases) 下载标准安装包 `Gift-Money-Management-System_0.4.51_x64-setup.exe`（本地名 `礼金簿_0.4.51_x64-setup.exe`，内容相同）。标准版使用系统 WebView2，缺少时安装器会联网安装运行时。GitHub 附件使用 ASCII 名称，软件名称仍是“礼金簿”。
 2. 首次启动会强制设置 6 至 12 位数字的管理员 PIN，并显示一次性恢复码；完成后可进入工作台新建礼金库。
 3. 已有数据可在工作台中打开 `.giftvault` 礼金库；数据保存在用户选择的位置，不依赖程序目录。
 4. 进入管理员模式后可在工作台修改 PIN。删除的礼金簿和记录会进入回收站；重要操作前可使用顶部备份按钮创建副本。

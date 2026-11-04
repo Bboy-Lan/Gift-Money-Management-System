@@ -196,7 +196,11 @@ pub struct UpdateProgress {
 #[derive(Clone)]
 enum Payload {
     Online(Box<Update>),
-    Local { name: String, hash: String },
+    Local {
+        directory: PathBuf,
+        name: String,
+        hash: String,
+    },
 }
 #[derive(Clone)]
 struct Prepared {
@@ -335,6 +339,31 @@ pub fn software_update_options() -> Result<SoftwareUpdateStatus, String> {
     })
 }
 
+fn local_package_directory(
+    release_root: &Path,
+    source: &Path,
+    version: &str,
+) -> Result<PathBuf, String> {
+    let candidate = super::candidate_from_path(source).ok_or("无效本地安装包名称")?;
+    let directory = source.parent().ok_or("本地安装包目录无效")?;
+    if candidate.version != version
+        || (directory != release_root && directory != release_root.join(version))
+    {
+        return Err("安装包必须位于固定发布目录或对应版本子目录".into());
+    }
+    for path in [release_root, directory] {
+        let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+        if is_link(&metadata) || !metadata.is_dir() {
+            return Err("本地更新目录不能为链接".into());
+        }
+    }
+    let metadata = std::fs::symlink_metadata(source).map_err(|e| e.to_string())?;
+    if is_link(&metadata) || !metadata.is_file() {
+        return Err("本地安装包必须是普通文件".into());
+    }
+    Ok(directory.to_path_buf())
+}
+
 fn local_manifest_hash(directory: &Path, file_name: &str) -> Result<String, String> {
     let text = std::fs::read_to_string(directory.join("SHA256SUMS.txt"))
         .map_err(|_| "本地安装包缺少校验清单")?;
@@ -382,9 +411,17 @@ pub async fn software_update_status(
     let mut remote_errors = Vec::new();
     // Local files are never allowed to turn an original-product package into a variant update.
     match super::local_update_candidate(&app) {
-        Ok(Some((local, _))) => {
-            match local_manifest_hash(&super::published_update_directory(&app), &local.file_name) {
-                Ok(hash) => {
+        Ok(Some((local, source))) => {
+            let package = local_package_directory(
+                &super::published_update_directory(&app),
+                &source,
+                &local.version,
+            )
+            .and_then(|directory| {
+                local_manifest_hash(&directory, &local.file_name).map(|hash| (directory, hash))
+            });
+            match package {
+                Ok((directory, hash)) => {
                     candidate = Some(Candidate {
                         info: SoftwareCandidate {
                             id: uuid::Uuid::new_v4().to_string(),
@@ -393,6 +430,7 @@ pub async fn software_update_status(
                             release_notes: local.release_notes,
                         },
                         payload: Payload::Local {
+                            directory,
                             name: local.file_name,
                             hash,
                         },
@@ -535,8 +573,16 @@ pub async fn prepare_software_update(
         return Err("当前为便携运行，请先通过下方下载方式安装礼金簿".into());
     }
     let prepared = match &candidate.payload {
-        Payload::Local { name, hash } => {
-            let directory = super::published_update_directory(&app);
+        Payload::Local {
+            directory,
+            name,
+            hash,
+        } => {
+            let directory = local_package_directory(
+                &super::published_update_directory(&app),
+                &directory.join(name),
+                &candidate.info.version,
+            )?;
             let (path, actual_hash) = super::update_security::prepare_installer(
                 &directory,
                 name,
@@ -738,6 +784,66 @@ pub fn open_download_channel(channel_id: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+
+    #[test]
+    fn local_candidate_uses_its_sibling_manifest_in_a_version_directory() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("local-release-{}", uuid::Uuid::new_v4()));
+        let package = root.join("0.4.51");
+        let name = "礼金簿_0.4.51_x64-setup.exe";
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join(name), b"installer fixture").unwrap();
+        let root_hash = "0".repeat(64);
+        let package_hash = "a".repeat(64);
+        std::fs::write(
+            root.join("SHA256SUMS.txt"),
+            format!("{root_hash}  {name}\n"),
+        )
+        .unwrap();
+        std::fs::write(
+            package.join("SHA256SUMS.txt"),
+            format!("{package_hash}  {name}\n"),
+        )
+        .unwrap();
+        let directory =
+            super::local_package_directory(&root, &package.join(name), "0.4.51").unwrap();
+        assert_eq!(directory, package);
+        assert_eq!(
+            super::local_manifest_hash(&directory, name).unwrap(),
+            package_hash
+        );
+        // Legacy flat releases remain supported.
+        std::fs::write(root.join(name), b"flat fixture").unwrap();
+        let flat = super::local_package_directory(&root, &root.join(name), "0.4.51").unwrap();
+        assert_eq!(flat, root);
+        assert_eq!(super::local_manifest_hash(&flat, name).unwrap(), root_hash);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn local_package_directory_rejects_other_versions_and_escaped_paths() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join(format!("local-boundary-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("0.4.50")).unwrap();
+        let name = "礼金簿_0.4.51_x64-setup.exe";
+        std::fs::write(root.join("0.4.50").join(name), b"wrong directory").unwrap();
+        assert!(
+            super::local_package_directory(&root, &root.join("0.4.50").join(name), "0.4.51")
+                .is_err()
+        );
+        assert!(
+            super::local_package_directory(&root, &root.join("..").join(name), "0.4.51").is_err()
+        );
+        assert!(super::local_package_directory(
+            &root,
+            &root.join("0.4.51/extra").join(name),
+            "0.4.51"
+        )
+        .is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn links_require_https_and_no_credentials_or_local_paths() {
