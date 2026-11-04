@@ -12,6 +12,7 @@ interface Messages {
   openInbox: () => void; closeInbox: () => void; setInboxTab: (tab: "announcements" | "replies") => void;
   openFeedback: (id?: string) => void; closeFeedback: () => void;
   readAnnouncement: (item: Announcement) => void; readReply: (id: string, timestamp: string) => void;
+  markPublishedRead: (item: Announcement) => void;
   refresh: (startup?: boolean) => Promise<void>;
   refreshAfterSessionChange: () => Promise<void>;
 }
@@ -81,6 +82,7 @@ export function MessageCenterProvider({ children }: { children: ReactNode }) {
     openFeedback: id => { closeInbox(); setAdminLoginRequested(false); setFocusFeedbackId(id); setFeedbackOpen(true); }, closeFeedback: () => setFeedbackOpen(false),
     openAdminLogin: () => { closeInbox(); setAdminLoginRequested(true); setFocusFeedbackId(undefined); setFeedbackOpen(true); },
     readAnnouncement: item => { setReadState(previous => markAnnouncementRead(previous, item)); closeInbox(); },
+    markPublishedRead: item => { setReadState(previous => { const next = markAnnouncementRead(previous, item); readRef.current = next; saveMessageState(next); return next; }); },
     readReply: (id, timestamp) => setReadState(previous => markReplyRead(previous, id, timestamp)), refresh,
     refreshAfterSessionChange: async () => { await pending.current; if (alive.current) await refresh(); },
   }}>{children}</MessageContext.Provider>;

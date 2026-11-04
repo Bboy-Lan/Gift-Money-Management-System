@@ -26,11 +26,11 @@ export function CloudFeedbackPanel({ appVersion }: { appVersion: string }) {
   return <section className="settings-panel feedback-settings-panel"><div><strong>意见反馈</strong><p>无需注册，发送反馈或查看回复时联网。仅发送你填写的反馈内容、软件版本和处理状态。不会上传礼金库文件、人物、金额、地址或本机路径。</p></div><button className="secondary-button compact" type="button" onClick={() => setOpen(true)}><MessageSquare size={14} />提交或查看反馈</button>{open && <CloudFeedbackModal appVersion={appVersion} onClose={() => setOpen(false)} />}</section>;
 }
 
-export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onReplyRead, isReplyUnread, focusFeedbackId, refreshKey, initialAdminLogin = false }: {
+export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onReplyRead, isReplyUnread, focusFeedbackId, refreshKey, initialAdminLogin = false, inline = false }: {
   appVersion: string; onClose: () => void; onSessionChanged?: () => void;
   onReplyRead?: (id: string, timestamp: string) => void; isReplyUnread?: (id: string, timestamp: string | null) => boolean;
   focusFeedbackId?: string; refreshKey?: string;
-  initialAdminLogin?: boolean;
+  initialAdminLogin?: boolean; inline?: boolean;
 }) {
   const [items, setItems] = useState<CloudFeedback[]>([]);
   const [replies, setReplies] = useState<Record<string, CloudFeedbackReply[]>>({});
@@ -48,6 +48,7 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
   const [expandedReply, setExpandedReply] = useState<string | null>(focusFeedbackId ?? null);
   const dialogRoot = useRef<HTMLElement>(null);
   const positionedReply = useRef<string | null>(null);
+  useEffect(() => { if (focusFeedbackId) setExpandedReply(focusFeedbackId); }, [focusFeedbackId]);
 
   const load = useCallback(async (forceAnonymous = false) => {
     setLoading(true);
@@ -109,7 +110,7 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
     } catch (reason) { setError(String(reason).replace(/^Error:\s*/, "")); } finally { setSubmitting(false); }
   };
 
-  return <div className="modal-backdrop"><section ref={dialogRoot} className="modal feedback-modal" role="dialog" aria-modal="true" aria-label="问题反馈">
+  return <div className={inline ? "feedback-workbench" : "modal-backdrop"}><section ref={dialogRoot} className={inline ? "feedback-workbench-content" : "modal feedback-modal"} role={inline ? undefined : "dialog"} aria-modal={inline ? undefined : "true"} aria-label="问题反馈">
     <div className="modal-heading"><h3>问题反馈</h3><button className="icon-button" type="button" aria-label="关闭问题反馈" onClick={onClose}>×</button></div>
     <p className="field-hint">无需注册即可提交和查看自己的反馈。反馈服务与礼金库严格分离；网络不可用不影响本地礼金簿。</p>
     {error && <p className="form-error" role="alert">{error}</p>}{notice && <p className="feedback-notice" role="status"><Check size={14} />{notice}</p>}

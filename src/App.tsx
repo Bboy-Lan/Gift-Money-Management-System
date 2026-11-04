@@ -37,8 +37,10 @@ import {
 import { api, createVaultApi } from "./lib/tauri";
 import { useVaultApi, VaultScopeContext } from "./lib/vaultScope";
 import { QueryFeedback } from "./components/QueryFeedback";
+import { DataMigration } from "./components/DataMigration";
 import { AboutSettings } from "./components/AboutSettings";
-import { FeedbackButton, MessageCenterButton } from "./components/MessageCenter";
+import { FeedbackButton, FeedbackWorkbench, MessageCenterButton, MessageOverlays } from "./components/MessageCenter";
+import { useMessages } from "./hooks/useMessages";
 import { SoftwareUpdateContext, useSoftwareUpdates } from "./hooks/useSoftwareUpdates";
 import { updateStatusMessage, type UpdatePhase } from "./lib/softwareUpdates";
 import { invalidateVaultQueries } from "./lib/vaultQueries";
@@ -94,7 +96,7 @@ const SPREADSHEET_EXTENSIONS = new Set(["xlsx", "xls", "xlsm", "xlsb", "ods", "c
 const SPREADSHEET_MAPPING_FIELDS: Array<[keyof SpreadsheetColumnMapping, string]> = [["name", "姓名"], ["amount", "金额"], ["paymentMethod", "支付方式"], ["address", "地址"], ["note", "备注"], ["tags", "人物标签"], ["returnGiftAmount", "回礼金额"], ["returnGift", "回礼备注"], ["returnGiftedAt", "回礼时间"], ["date", "登记日期"]];
 const DEFAULT_IMPORT_PREVIEW_FIELDS: Array<[keyof SpreadsheetColumnMapping, string]> = [["name", "姓名"], ["amount", "金额"], ["paymentMethod", "支付方式"], ["address", "地址"], ["note", "备注"], ["tags", "标签"], ["returnGiftAmount", "回礼金额"], ["returnGift", "回礼备注"], ["returnGiftedAt", "回礼时间"], ["date", "登记日期"]];
 type LocalUpdatePhase = UpdatePhase;
-type SettingsSection = "general" | "about" | "donate";
+type SettingsSection = "general" | "about" | "donate" | "migration";
 type OpenedVaultSession = { vault: VaultInfo; activeBookId: string | null; activeTab: Tab };
 
 function vaultPathKey(path: string) {
@@ -180,6 +182,7 @@ function startWelcomeDrag(event: React.MouseEvent<HTMLElement>) {
 }
 
 function App() {
+  const messages = useMessages();
   const client = useQueryClient();
   const [vault, setVault] = useState<VaultInfo | null>(null);
   const [scope, setScope] = useState({ active: true });
@@ -772,6 +775,7 @@ function App() {
   const installLocalUpdate = () => updates.install();
 
   const overlays = <>
+    {(workspaceOpen || Boolean(vault)) && <MessageOverlays />}
     {updates.bannerVisible && updates.status?.candidate && (!workspaceOpen || Boolean(vault)) && <div className="software-update-banner" role="status"><span>发现新版本 v{updates.status.candidate.version}</span>{updates.status.installed ? <button className="primary-button compact" disabled={!["idle", "ready"].includes(localUpdatePhase)} onClick={() => void updates.install()}>{localUpdatePhase === "ready" ? "重启并安装" : ["downloading", "verifying"].includes(localUpdatePhase) ? "下载校验中…" : "立即更新"}</button> : <button className="primary-button compact" onClick={() => { setSoftwareSettingsOpen(true); updates.dismiss(); }}>查看下载方式</button>}<button className="text-button" onClick={updates.dismiss}>稍后</button></div>}
     {updates.error && <ErrorToast message={updates.error} onClose={updates.clearError} />}
     {dragActive && <DropOverlay />}
@@ -795,7 +799,7 @@ function App() {
 
   if (!vault) {
     return <SoftwareUpdateContext.Provider value={updates}><>
-      <WorkspaceStart session={session} updateStatus={updates.status} pendingSpreadsheetPaths={pendingSpreadsheetPaths} onClose={returnToStartPage} onOpenVault={openVault} onBeginCreate={() => void beginCreateVault()} onChooseImport={() => void chooseSpreadsheetPathsForWorkspace()} onUnlock={() => { setEnterWorkspaceAfterAdmin(false); setPendingWorkspaceVault(null); setAdminPrompt(session.securityConfigured ? "unlock" : "setup"); }} onChangePin={() => setPinChangeOpen(true)} onOpenSoftwareSettings={() => setSoftwareSettingsOpen(true)} />
+      {messages?.feedbackOpen ? <main className="settings-view"><FeedbackWorkbench /></main> : <WorkspaceStart session={session} updateStatus={updates.status} pendingSpreadsheetPaths={pendingSpreadsheetPaths} onClose={returnToStartPage} onOpenVault={openVault} onBeginCreate={() => void beginCreateVault()} onChooseImport={() => void chooseSpreadsheetPathsForWorkspace()} onUnlock={() => { setEnterWorkspaceAfterAdmin(false); setPendingWorkspaceVault(null); setAdminPrompt(session.securityConfigured ? "unlock" : "setup"); }} onChangePin={() => setPinChangeOpen(true)} onOpenSoftwareSettings={() => setSoftwareSettingsOpen(true)} />}
       {createVaultOpen && <CreateVaultModal error={createVaultError} isSaving={createVaultSaving} vaultName={vaultName} vaultNotes={vaultNotes} onNameChange={setVaultName} onNotesChange={setVaultNotes} onClose={() => setCreateVaultOpen(false)} onCreate={createVault} />}
       {softwareSettingsOpen && <NoVaultSoftwareSettings updatePhase={localUpdatePhase} updateStatus={updates.status} lastUpdateCheckAt={lastUpdateCheckAt} onCheckUpdate={checkLocalUpdate} onInstallUpdate={installLocalUpdate} onError={setError} onClose={() => setSoftwareSettingsOpen(false)} />}
       {overlays}
@@ -861,7 +865,6 @@ function WelcomeScreen(props: { recentVaults: RecentVault[]; session: SessionSta
     <main className="welcome-shell">
       <section className={`welcome-panel ${props.noticeVisible ? "notice-visible" : ""}`} onMouseDown={startWelcomeDrag}>
         <div className="welcome-drag-handle" data-tauri-drag-region aria-hidden="true" />
-        <div className="welcome-message-entry"><MessageCenterButton /></div>
         <button className="icon-button subtle welcome-close" type="button" title="退出程序" aria-label="退出程序" onClick={closeWelcomeWindow}><X size={16} /></button>
         <div className="brand-lockup" data-tauri-drag-region>
           <div className="brand-mark"><BookOpen size={22} /></div>
@@ -1005,6 +1008,8 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
   const client = useQueryClient();
   const [activeBookId, setActiveBookId] = useState<string | null>(initialBookId);
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+  const messages = useMessages();
+  useEffect(() => { if (messages?.feedbackOpen && activeTab !== "settings") { if (canLeaveWorkspace()) setActiveTab("settings"); else messages.closeFeedback(); } }, [messages?.feedbackOpen]);
   const [bookModal, setBookModal] = useState(false);
   const [bookToClose, setBookToClose] = useState<GiftBook | null>(null);
   const [vaultToClose, setVaultToClose] = useState<{ path: string; name: string } | null>(null);
@@ -1031,7 +1036,7 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
     setBookModal(false); bookEditTargetRef.current = null; setBookEditTarget(null); setVaultEditOpen(false); setSpreadsheetImportOpen(false); return true;
   };
   const selectBook = (bookId: string) => { if (bookId === activeBookId && activeTab === "entries") return; if (!leaveLocalView()) return; setActiveBookId(bookId); setActiveTab("entries"); setFocusedEntryId(null); onVaultActivity(); };
-  const selectTab = (tab: Tab) => { if (tab === activeTab || !leaveLocalView()) return; setActiveTab(tab); };
+  const selectTab = (tab: Tab) => { if (tab === activeTab || !leaveLocalView()) return; if (tab !== "settings") messages?.closeFeedback(); setActiveTab(tab); };
   const [bookEditSaving, setBookEditSaving] = useState(false);
   const [bookEditError, setBookEditError] = useState<unknown>(null);
   const [importError, setImportError] = useState<unknown>(null);
@@ -1428,6 +1433,7 @@ function VaultWorkspace({ initialEntryId, vault, openedVaults, initialBookId, in
 }
 
 function SettingsView({ session, onUnlock, onUnlockEditing, onLockEditing, onChangePin, onCheckUpdate, onInstallUpdate, updatePhase, updateStatus, lastUpdateCheckAt, onNotice = () => undefined, onError = (message) => console.error(message) }: { session: SessionStatus; onUnlock: () => void; onUnlockEditing: () => void; onLockEditing: () => void; onChangePin: () => void; onCheckUpdate: () => void; onInstallUpdate: () => void; updatePhase: LocalUpdatePhase; updateStatus: LocalUpdateStatus | null; lastUpdateCheckAt: string | null; onNotice?: (message: string) => void; onError?: (message: string) => void }) {
+  const messages = useMessages();
   const isAdmin = session.role === "admin";
   const [section, setSection] = useState<SettingsSection>("general");
   const [licenseOpen, setLicenseOpen] = useState(false);
@@ -1441,7 +1447,7 @@ function SettingsView({ session, onUnlock, onUnlockEditing, onLockEditing, onCha
   };
   const checkedAt = lastUpdateCheckAt ? new Date(lastUpdateCheckAt).toLocaleString("zh-CN", { hour12: false }) : "尚未检查";
   const updateMessage = updateStatusMessage(updateStatus);
-  return <section className="settings-view"><div className="settings-heading"><div><span className="eyebrow">软件设置</span><h2>设置</h2><p>管理本机偏好、编辑权限和软件版本信息。</p></div></div><div className="settings-layout"><nav className="settings-nav" aria-label="设置分类"><button type="button" className={section === "general" ? "active" : ""} onClick={() => setSection("general")}><Settings size={15} />通用</button><button type="button" className={section === "about" ? "active" : ""} onClick={() => setSection("about")}><Info size={15} />关于</button><button type="button" className={section === "donate" ? "active" : ""} onClick={() => setSection("donate")}><Gift size={15} />打赏支持</button><FeedbackButton /></nav><div className="settings-content">{section === "general" ? <><section className="settings-panel"><div><strong>默认文件夹</strong><p className="settings-path" title={storage.data?.directory}>{storage.isLoading ? "正在读取…" : storage.data?.directory}</p><p>用于新建或打开礼金库、选择导入表格时的默认位置；不会移动已有文件。</p><button className="secondary-button compact" disabled={chooseDirectory.isPending} onClick={() => chooseDirectory.mutate()}><FolderOpen size={14} />{chooseDirectory.isPending ? "选择中…" : "选择默认文件夹"}</button></div></section><section className="settings-panel"><div className="toolbar-actions">{isAdmin ? <><button className="secondary-button compact edit-lock-button" data-operation-hint={session.editLocked ? "提示：解锁后可执行删除和重要资料修改。" : "提示：锁定后将暂停高风险修改与删除。"} type="button" onClick={session.editLocked ? onUnlockEditing : onLockEditing}><LockKeyhole size={14} />{session.editLocked ? "解锁编辑" : "锁定编辑"}</button><button className="secondary-button compact" data-operation-hint="提示：修改 PIN 后会生成新的恢复码。" type="button" onClick={onChangePin}><KeyRound size={14} />修改 PIN</button><button className="secondary-button compact" type="button" onClick={() => setTableStyleOpen((open) => !open)}><ArrowUpDown size={14} />编辑表格样式</button></> : <button className="secondary-button compact" data-operation-hint="提示：管理员解锁后可管理编辑保护和 PIN。" type="button" onClick={onUnlock}><Unlock size={14} />管理员解锁</button>}</div></section>{tableStyleOpen && <TableStyleSettings canEdit={isAdmin && !session.editLocked} onNotice={onNotice} />}</> : section === "about" ? <AboutSettings updatePhase={updatePhase} updateStatus={updateStatus} checkedAt={checkedAt} updateMessage={updateMessage} onCheckUpdate={onCheckUpdate} onInstallUpdate={onInstallUpdate} onShowLicense={checkLicense} licenseOpen={licenseOpen} licenseText={licenseText} /> : <DonationSettings />}</div></div></section>;
+  return <section className="settings-view"><div className="settings-heading"><div><span className="eyebrow">软件设置</span><h2>设置</h2><p>管理本机偏好、编辑权限和软件版本信息。</p></div></div><div className="settings-layout"><nav className="settings-nav" aria-label="设置分类"><button type="button" className={!messages?.feedbackOpen && section === "general" ? "active" : ""} onClick={() => { messages?.closeFeedback(); setSection("general"); }}><Settings size={15} />通用</button><button type="button" className={section === "about" ? "active" : ""} onClick={() => { messages?.closeFeedback(); setSection("about"); }}><Info size={15} />关于</button><button type="button" className={section === "donate" ? "active" : ""} onClick={() => { messages?.closeFeedback(); setSection("donate"); }}><Gift size={15} />打赏支持</button><FeedbackButton /><button type="button" className={section === "migration" && !messages?.feedbackOpen ? "active" : ""} onClick={() => { messages?.closeFeedback(); setSection("migration"); }}>数据迁移</button></nav><div className="settings-content">{messages?.feedbackOpen ? <FeedbackWorkbench /> : section === "migration" ? <DataMigration /> : section === "general" ? <><section className="settings-panel"><div><strong>默认文件夹</strong><p className="settings-path" title={storage.data?.directory}>{storage.isLoading ? "正在读取…" : storage.data?.directory}</p><p>用于新建或打开礼金库、选择导入表格时的默认位置；不会移动已有文件。</p><button className="secondary-button compact" disabled={chooseDirectory.isPending} onClick={() => chooseDirectory.mutate()}><FolderOpen size={14} />{chooseDirectory.isPending ? "选择中…" : "选择默认文件夹"}</button></div></section><section className="settings-panel"><div className="toolbar-actions">{isAdmin ? <><button className="secondary-button compact edit-lock-button" data-operation-hint={session.editLocked ? "提示：解锁后可执行删除和重要资料修改。" : "提示：锁定后将暂停高风险修改与删除。"} type="button" onClick={session.editLocked ? onUnlockEditing : onLockEditing}><LockKeyhole size={14} />{session.editLocked ? "解锁编辑" : "锁定编辑"}</button><button className="secondary-button compact" data-operation-hint="提示：修改 PIN 后会生成新的恢复码。" type="button" onClick={onChangePin}><KeyRound size={14} />修改 PIN</button><button className="secondary-button compact" type="button" onClick={() => setTableStyleOpen((open) => !open)}><ArrowUpDown size={14} />编辑表格样式</button></> : <button className="secondary-button compact" data-operation-hint="提示：管理员解锁后可管理编辑保护和 PIN。" type="button" onClick={onUnlock}><Unlock size={14} />管理员解锁</button>}</div></section>{tableStyleOpen && <TableStyleSettings canEdit={isAdmin && !session.editLocked} onNotice={onNotice} />}</> : section === "about" ? <AboutSettings updatePhase={updatePhase} updateStatus={updateStatus} checkedAt={checkedAt} updateMessage={updateMessage} onCheckUpdate={onCheckUpdate} onInstallUpdate={onInstallUpdate} onShowLicense={checkLicense} licenseOpen={licenseOpen} licenseText={licenseText} /> : <DonationSettings />}</div></div></section>;
 }
 
 const DEFAULT_TABLE_COLUMNS = ["姓名", "金额", "支付方式", "地址", "备注", "标签", "回礼金额", "回礼备注", "回礼时间", "登记日期"];

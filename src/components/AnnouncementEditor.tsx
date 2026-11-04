@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { listAnnouncementDrafts, publishAnnouncement, saveAnnouncementDraft } from "../lib/cloudFeedback";
 import type { Announcement, AnnouncementDraft } from "../lib/messageState";
 
-export function AnnouncementEditor({ initial, onPublished, onClose }: { initial?: Announcement; onPublished: () => Promise<void>; onClose: () => void }) {
+export function AnnouncementEditor({ initial, onPublished, onClose }: { initial?: Announcement; onPublished: (item: Announcement) => Promise<void>; onClose: () => void }) {
   const [id, setId] = useState<string | undefined>(initial?.id);
   const [title, setTitle] = useState(initial?.title ?? ""), [body, setBody] = useState(initial?.body ?? "");
   const [drafts, setDrafts] = useState<AnnouncementDraft[]>([]);
@@ -22,7 +22,7 @@ export function AnnouncementEditor({ initial, onPublished, onClose }: { initial?
     try {
       const draft = await saveAnnouncementDraft({ id, title, body });
       setId(draft.id); setDrafts(items => [draft, ...items.filter(item => item.id !== draft.id)]);
-      if (publish) { await publishAnnouncement(draft.id); await onPublished(); }
+      if (publish) { const published = await publishAnnouncement(draft.id); await onPublished(published); }
       else setNotice("草稿已保存，用户不会收到通知。发布后才会推送新公告。");
     } catch (reason) { setError(String(reason).replace(/^Error:\s*/, "")); } finally { setBusy(false); }
   };
