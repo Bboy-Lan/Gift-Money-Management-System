@@ -8691,6 +8691,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             data_migration::export_migration,
             data_migration::import_migration,
+            data_migration::import_migration_file,
             feedback_http::feedback_http_request,
             choose_vault_path,
             choose_vault_path_named,

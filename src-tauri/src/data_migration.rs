@@ -26,6 +26,7 @@ fn digest(path: &Path) -> Result<String, String> {
     Ok(format!("{:x}", hash.finalize()))
 }
 
+#[cfg(test)]
 fn export_to(sources: &[PathBuf], directory: &Path) -> Result<usize, String> {
     if sources.is_empty() || sources.len() > 100 {
         return Err("请选择 1 至 100 个礼金库".into());
@@ -92,29 +93,47 @@ fn import_to(source: &Path, destination: &Path) -> Result<usize, String> {
 pub(crate) fn export_migration(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let _operation = begin_operation()?;
     require_admin(&state)?;
-    let Some(sources) = FileDialog::new()
+    let source = active_vault_path(&state)?;
+    let Some(chosen) = FileDialog::new()
+        .set_title("保存当前礼金库副本")
         .add_filter("礼金库", &["giftvault"])
-        .pick_files()
+        .set_file_name("礼金库备份.giftvault")
+        .save_file()
     else {
         return Ok(None);
     };
-    let Some(parent) = FileDialog::new()
-        .set_title("选择迁移数据保存位置")
-        .pick_folder()
-    else {
-        return Ok(None);
-    };
-    let directory = parent.join(format!("礼金簿迁移-{}", Uuid::new_v4()));
-    std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
-    let count = export_to(&sources, &directory).map_err(|e| {
-        format!(
-            "导出未完成，原文件未修改；未完成目录 {}：{e}",
-            displayable_path(&directory)
-        )
-    })?;
+    let destination = normalize_vault_path(&displayable_path(&chosen));
+    snapshot_vault(&source, &destination)?;
     Ok(Some(format!(
-        "已导出 {count} 个礼金库至 {}",
-        displayable_path(&directory)
+        "礼金库已导出至 {}",
+        displayable_path(&destination)
+    )))
+}
+
+#[tauri::command(async)]
+pub(crate) fn import_migration_file(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    let _operation = begin_operation()?;
+    require_admin(&state)?;
+    let Some(source) = FileDialog::new()
+        .set_title("选择要导入的礼金库")
+        .add_filter("礼金库", &["giftvault"])
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    let Some(chosen) = FileDialog::new()
+        .set_title("保存导入的礼金库")
+        .add_filter("礼金库", &["giftvault"])
+        .set_file_name("导入的礼金库.giftvault")
+        .save_file()
+    else {
+        return Ok(None);
+    };
+    let destination = normalize_vault_path(&displayable_path(&chosen));
+    snapshot_vault(&source, &destination)?;
+    Ok(Some(format!(
+        "礼金库已导入至 {}，请使用“打开礼金库”选择该文件。",
+        displayable_path(&destination)
     )))
 }
 
@@ -151,6 +170,22 @@ pub(crate) fn import_migration(state: State<'_, AppState>) -> Result<Option<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn direct_export_uses_exact_selected_file_and_never_overwrites() {
+        let root = std::env::temp_dir().join(format!("migration-direct-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.giftvault");
+        let target = root.join("指定保存位置.giftvault");
+        create_vault_file(&source, "测试礼金库", "").unwrap();
+        snapshot_vault(&source, &target).unwrap();
+        validate_vault_file(&target).unwrap();
+        let original = std::fs::read(&target).unwrap();
+        assert!(snapshot_vault(&source, &target).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), original);
+        assert!(snapshot_vault(&source, &source).is_err());
+        validate_vault_file(&source).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn roundtrip_preserves_data_and_rejects_corruption() {
         let root = std::env::temp_dir().join(format!("migration-{}", Uuid::new_v4()));
