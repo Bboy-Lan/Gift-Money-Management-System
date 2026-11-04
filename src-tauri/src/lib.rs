@@ -17,6 +17,7 @@ use tauri::{Manager, State};
 use uuid::Uuid;
 
 mod app_security;
+mod feedback_http;
 mod models;
 mod single_instance;
 mod software_updates;
@@ -8687,6 +8688,7 @@ pub fn run() {
             session: Mutex::new(SessionState::default()),
         })
         .invoke_handler(tauri::generate_handler![
+            feedback_http::feedback_http_request,
             choose_vault_path,
             choose_vault_path_named,
             choose_comparison_vault_paths,

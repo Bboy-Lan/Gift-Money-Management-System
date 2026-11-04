@@ -1,4 +1,5 @@
 import cloudbase from "@cloudbase/js-sdk";
+import { installFeedbackTransport } from "./feedbackTransport";
 
 const CLOUDBASE_ENV_ID = "cloud-ynnu-d6gs8ekf7dbcbe80e";
 
@@ -36,14 +37,22 @@ type CloudQuery = {
   ) => Promise<TResult1 | TResult2>;
 };
 
-type CloudDatabase = { from: (table: string) => CloudQuery };
+type CloudDatabase = {
+  from: (table: string) => CloudQuery;
+  rpc: (name: string) => Promise<CloudResult<{ is_admin: boolean }[]>>;
+};
+
+export interface FeedbackAdminCodeChallenge {
+  verify: (code: string) => Promise<void>;
+}
 
 type CloudApp = ReturnType<typeof cloudbase.init>;
 let feedbackClient: { app: CloudApp; auth: ReturnType<CloudApp["auth"]> } | undefined;
 
 function client() {
   if (!feedbackClient) {
-    const app = cloudbase.init({ env: CLOUDBASE_ENV_ID, region: "ap-shanghai" });
+    installFeedbackTransport(cloudbase);
+    const app = cloudbase.init({ env: CLOUDBASE_ENV_ID, region: "ap-shanghai", persistence: "local" });
     feedbackClient = { app, auth: app.auth() };
   }
   return feedbackClient;
@@ -83,25 +92,55 @@ export function normalizeFeedbackContent(value: string) {
   return value.trim().replace(/\r\n/g, "\n");
 }
 
-export async function ensureFeedbackUserSession() {
+export async function ensureFeedbackUserSession(): Promise<{ isAdminSession: boolean }> {
   const { auth } = client();
   const current = await auth.getSession();
-  if (current.error) throw new Error(current.error.message || "无法读取反馈登录状态");
-  if (current.data?.session) return { isAdminSession: !sessionIsAnonymous(current.data.session) };
+  // The SDK reports a missing first-use credential as an auth error, not a null session.
+  if (current.error && (current.error.code !== "unauthenticated" || current.data?.session)) {
+    throw new Error(current.error.message || "无法读取反馈登录状态");
+  }
+  if (current.data?.session) {
+    if (sessionIsAnonymous(current.data.session)) return { isAdminSession: false };
+    if (await isFeedbackAdmin()) return { isAdminSession: true };
+    return switchToAnonymousFeedback();
+  }
   const signedIn = await auth.signInAnonymously();
   if (signedIn.error) throw new Error(signedIn.error.message || "无法建立匿名反馈会话");
   return { isAdminSession: false };
 }
 
-export async function signInFeedbackAdmin(username: string, password: string) {
-  const { auth } = client();
-  const result = await auth.signInWithPassword({ username: username.trim(), password });
-  if (result.error) throw new Error(result.error.message || "管理员登录失败");
-  if (!result.data?.session) throw new Error("管理员登录未建立有效会话");
-  return true;
+async function isFeedbackAdmin() {
+  const rows = readResult(await database().rpc("feedback_admin_status"));
+  if (!Array.isArray(rows) || rows.length !== 1 || typeof rows[0]?.is_admin !== "boolean") {
+    throw new Error("管理员权限响应无效，请稍后重试");
+  }
+  return rows[0].is_admin;
 }
 
-export async function switchToAnonymousFeedback() {
+export async function requestFeedbackAdminCode(emailInput: string): Promise<FeedbackAdminCodeChallenge> {
+  const email = emailInput.trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) throw new Error("请填写有效的管理员邮箱");
+  const { auth } = client();
+  const result = await auth.signInWithOtp({ email, options: { shouldCreateUser: false } });
+  if (result.error) throw new Error(result.error.message || "管理员验证码发送失败");
+  const verifyOtp = result.data?.verifyOtp;
+  if (!verifyOtp) throw new Error("未能建立邮箱验证码验证，请重新获取验证码");
+  return {
+    verify: async (codeInput: string) => {
+      const code = codeInput.trim();
+      if (!/^\d{6}$/.test(code)) throw new Error("请填写 6 位数字验证码");
+      const verified = await verifyOtp({ token: code });
+      if (verified.error) throw new Error(verified.error.message || "验证码验证失败");
+      if (!verified.data?.session) throw new Error("管理员登录未建立有效会话");
+      if (!await isFeedbackAdmin()) {
+        await switchToAnonymousFeedback();
+        throw new Error("该邮箱未获管理员授权，已返回普通反馈模式");
+      }
+    },
+  };
+}
+
+export async function switchToAnonymousFeedback(): Promise<{ isAdminSession: boolean }> {
   const { auth } = client();
   const signedOut = await auth.signOut();
   if (signedOut && "error" in signedOut && signedOut.error) throw new Error((signedOut.error as { message?: string }).message || "无法退出管理员反馈会话");

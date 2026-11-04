@@ -8,7 +8,7 @@ import { transform } from "esbuild";
 const feedbackSource = await readFile(new URL("../src/lib/cloudFeedback.ts", import.meta.url), "utf8");
 const feedbackComponent = await readFile(new URL("../src/components/CloudFeedback.tsx", import.meta.url), "utf8");
 const schema = await readFile(new URL("../cloudbase/feedback/001_feedback_schema.sql", import.meta.url), "utf8");
-const compiledFeedback = (await transform(feedbackSource, { loader: "ts", format: "esm" })).code;
+const compiledFeedback = (await transform(feedbackSource, { loader: "ts", format: "esm" })).code.replace('import { installFeedbackTransport } from "./feedbackTransport";', 'const installFeedbackTransport = () => {};');
 const projectRoot = fileURLToPath(new URL("..", import.meta.url));
 
 test("importing feedback and rejecting invalid text lets the real SDK process exit", () => {
@@ -31,7 +31,6 @@ test("feedback initializes once on first session use and reuses its authenticati
     const calls = [];
     const authClient = {
       async getSession() { calls.push("getSession"); return { data: { session: { user: { is_anonymous: true } } } }; },
-      async signInWithPassword() { calls.push("signInWithPassword"); return { data: { session: {} } }; },
       async signOut() { calls.push("signOut"); return {}; }
     };
     const cloudbase = { init(options) {
@@ -44,11 +43,11 @@ test("feedback initializes once on first session use and reuses its authenticati
     import assert from "node:assert/strict";
     assert.deepEqual(calls, []);
     assert.deepEqual(await ensureFeedbackUserSession(), { isAdminSession: false });
-    await signInFeedbackAdmin("admin", "test-only");
+    await ensureFeedbackUserSession();
     await switchToAnonymousFeedback();
     assert.deepEqual(calls, [
-      ["init", { env: "cloud-ynnu-d6gs8ekf7dbcbe80e", region: "ap-shanghai" }],
-      "auth", "getSession", "signInWithPassword", "signOut", "getSession"
+      ["init", { env: "cloud-ynnu-d6gs8ekf7dbcbe80e", region: "ap-shanghai", persistence: "local" }],
+      "auth", "getSession", "getSession", "signOut", "getSession"
     ]);
   `], { cwd: projectRoot, encoding: "utf8", timeout: 5000, windowsHide: true });
   assert.equal(result.error, undefined);
@@ -59,6 +58,13 @@ test("feedback client keeps local gift data out of the cloud payload", () => {
   assert.match(feedbackSource, /client_platform: "windows-desktop"/);
   assert.doesNotMatch(feedbackSource, /giftvault|vault_path|person_name|amount_cents|entry_id/i);
   assert.match(feedbackComponent, /请勿填写礼金明细、姓名、金额、地址或礼金库路径/);
+});
+
+test("packaged feedback permits the actual CloudBase authentication and database gateway", async () => {
+  const config = JSON.parse(await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+  const connect = config.app.security.csp.split(";").find(value => value.trim().startsWith("connect-src ")).trim().split(/\s+/).slice(1);
+  assert.ok(connect.includes("https://cloud-ynnu-d6gs8ekf7dbcbe80e.api.tcloudbasegateway.com"), "The packaged CSP must permit the gateway used by the real SDK");
+  assert.ok(!connect.includes("https:") && !connect.includes("*"));
 });
 
 test("feedback schema binds ownership to CloudBase JWT claims and applies RLS", () => {
