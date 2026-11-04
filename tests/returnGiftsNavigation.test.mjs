@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-test("return-gift navigation is above history and history is not duplicated in the top tabs", async () => {
+test("return-gift navigation stays between entries and outbound gifts", async () => {
   const source = await readFile(new URL("../src/App.tsx", import.meta.url), "utf8");
-  const sidebarReturn = source.indexOf('activeTab === "returnGifts"');
-  const sidebarHistory = source.indexOf('activeTab === "history"');
+  const sidebar = source.match(/<div className="sidebar-bottom">([\s\S]*?)<VersionBadge/ )?.[1] ?? "";
   const topTabs = source.match(/<nav className="tab-bar">([\s\S]*?)<\/nav>/)?.[1] ?? "";
 
-  assert.ok(sidebarReturn >= 0);
-  assert.ok(sidebarHistory > sidebarReturn);
+  assert.doesNotMatch(sidebar, /回礼明细/);
+  assert.match(topTabs, /礼金明细<\/button>[\s\S]*?回礼明细<\/button>[\s\S]*?我的随礼<\/button>/);
+  assert.match(source, /const showBookNavigation = [^;]*activeTab === "returnGifts"/);
   assert.match(source, /<ReturnGiftsView vaultPath=\{vault\.path\} isAdmin=\{canEdit\}/);
   assert.match(source, /!activeBook && activeTab === "returnGifts"[\s\S]*?<ReturnGiftsView/);
   assert.match(source, /!activeBook && activeTab === "history"[\s\S]*?<HistoryView/);
