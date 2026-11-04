@@ -1,5 +1,6 @@
 import cloudbase from "@cloudbase/js-sdk";
 import { installFeedbackTransport } from "./feedbackTransport";
+import type { Announcement, AnnouncementDraft, FeedbackReplyStatus } from "./messageState";
 
 const CLOUDBASE_ENV_ID = "cloud-ynnu-d6gs8ekf7dbcbe80e";
 
@@ -39,7 +40,7 @@ type CloudQuery = {
 
 type CloudDatabase = {
   from: (table: string) => CloudQuery;
-  rpc: (name: string) => Promise<CloudResult<{ is_admin: boolean }[]>>;
+  rpc: <T = unknown>(name: string, args?: Record<string, unknown>) => Promise<CloudResult<T>>;
 };
 
 export interface FeedbackAdminCodeChallenge {
@@ -48,6 +49,7 @@ export interface FeedbackAdminCodeChallenge {
 
 type CloudApp = ReturnType<typeof cloudbase.init>;
 let feedbackClient: { app: CloudApp; auth: ReturnType<CloudApp["auth"]> } | undefined;
+let sessionRequest: Promise<{ isAdminSession: boolean }> | undefined;
 
 function client() {
   if (!feedbackClient) {
@@ -92,7 +94,12 @@ export function normalizeFeedbackContent(value: string) {
   return value.trim().replace(/\r\n/g, "\n");
 }
 
-export async function ensureFeedbackUserSession(): Promise<{ isAdminSession: boolean }> {
+export function ensureFeedbackUserSession(): Promise<{ isAdminSession: boolean }> {
+  if (!sessionRequest) sessionRequest = restoreFeedbackUserSession().finally(() => { sessionRequest = undefined; });
+  return sessionRequest;
+}
+
+async function restoreFeedbackUserSession(): Promise<{ isAdminSession: boolean }> {
   const { auth } = client();
   const current = await auth.getSession();
   // The SDK reports a missing first-use credential as an auth error, not a null session.
@@ -102,7 +109,8 @@ export async function ensureFeedbackUserSession(): Promise<{ isAdminSession: boo
   if (current.data?.session) {
     if (sessionIsAnonymous(current.data.session)) return { isAdminSession: false };
     if (await isFeedbackAdmin()) return { isAdminSession: true };
-    return switchToAnonymousFeedback();
+    const signedOut = await auth.signOut();
+    if (signedOut && "error" in signedOut && signedOut.error) throw new Error((signedOut.error as { message?: string }).message || "无法切换普通反馈身份");
   }
   const signedIn = await auth.signInAnonymously();
   if (signedIn.error) throw new Error(signedIn.error.message || "无法建立匿名反馈会话");
@@ -110,7 +118,7 @@ export async function ensureFeedbackUserSession(): Promise<{ isAdminSession: boo
 }
 
 async function isFeedbackAdmin() {
-  const rows = readResult(await database().rpc("feedback_admin_status"));
+  const rows = readResult(await database().rpc<{ is_admin: boolean }[]>("feedback_admin_status"));
   if (!Array.isArray(rows) || rows.length !== 1 || typeof rows[0]?.is_admin !== "boolean") {
     throw new Error("管理员权限响应无效，请稍后重试");
   }
@@ -141,6 +149,7 @@ export async function requestFeedbackAdminCode(emailInput: string): Promise<Feed
 }
 
 export async function switchToAnonymousFeedback(): Promise<{ isAdminSession: boolean }> {
+  await sessionRequest?.catch(() => undefined);
   const { auth } = client();
   const signedOut = await auth.signOut();
   if (signedOut && "error" in signedOut && signedOut.error) throw new Error((signedOut.error as { message?: string }).message || "无法退出管理员反馈会话");
@@ -175,5 +184,28 @@ export async function replyToFeedback(feedbackId: string, contentInput: string, 
   if (!content) throw new Error("请填写回复内容");
   if (content.length > 4000) throw new Error("回复内容不能超过 4000 个字符");
   ensureSuccess(await database().from("feedback_replies").insert({ feedback_id: feedbackId, content }));
-  ensureSuccess(await database().from("feedback").update({ status, last_replied_at: new Date().toISOString() }).eq("id", feedbackId));
+  ensureSuccess(await database().from("feedback").update({ status }).eq("id", feedbackId));
+}
+
+export async function listAnnouncements() {
+  return readResult(await database().from("announcements").select("id,title,body,revision,published_at").order("published_at", { ascending: false }) as CloudResult<Announcement[]>);
+}
+export async function listAnnouncementDrafts() {
+  return readResult(await database().from("announcement_drafts").select("id,title,body,updated_at").order("updated_at", { ascending: false }) as CloudResult<AnnouncementDraft[]>);
+}
+export async function listFeedbackReplyStatus() {
+  return readResult(await database().from("feedback").select("id,last_replied_at").order("last_replied_at", { ascending: false }) as CloudResult<FeedbackReplyStatus[]>);
+}
+export async function saveAnnouncementDraft(input: { id?: string; title: string; body: string }) {
+  const title = input.title.trim(), body = input.body.trim();
+  if (!title || title.length > 120) throw new Error("公告标题须为 1 至 120 个字符");
+  if (!body || body.length > 8000) throw new Error("公告正文须为 1 至 8000 个字符");
+  const rows = readResult(await database().rpc<AnnouncementDraft[]>("save_announcement_draft", { p_id: input.id ?? null, p_title: title, p_body: body }));
+  if (!Array.isArray(rows) || rows.length !== 1) throw new Error("公告草稿保存结果无效");
+  return rows[0];
+}
+export async function publishAnnouncement(id: string) {
+  const rows = readResult(await database().rpc<Announcement[]>("publish_announcement", { p_id: id }));
+  if (!Array.isArray(rows) || rows.length !== 1) throw new Error("公告发布结果无效");
+  return rows[0];
 }

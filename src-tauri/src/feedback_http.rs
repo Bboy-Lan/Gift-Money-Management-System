@@ -32,6 +32,10 @@ fn validate_request(input: &FeedbackRequest) -> Result<(Url, Method, HeaderMap),
             "/v1/rdb/rest/feedback"
                 | "/v1/rdb/rest/feedback_replies"
                 | "/v1/rdb/rest/rpc/feedback_admin_status"
+                | "/v1/rdb/rest/announcements"
+                | "/v1/rdb/rest/announcement_drafts"
+                | "/v1/rdb/rest/rpc/save_announcement_draft"
+                | "/v1/rdb/rest/rpc/publish_announcement"
         );
     if url.scheme() != "https"
         || url.host_str() != Some(HOST)
@@ -156,6 +160,10 @@ mod tests {
     #[test]
     fn only_feedback_gateway_routes_are_accepted() {
         for path in [
+            "/v1/rdb/rest/announcements",
+            "/v1/rdb/rest/announcement_drafts",
+            "/v1/rdb/rest/rpc/save_announcement_draft",
+            "/v1/rdb/rest/rpc/publish_announcement",
             "/auth/v1/user/me",
             "/auth/v1/token",
             "/v1/rdb/rest/feedback?select=id",

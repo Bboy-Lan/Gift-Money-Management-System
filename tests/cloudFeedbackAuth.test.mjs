@@ -94,6 +94,13 @@ test("a session transport failure does not replace the remembered identity", () 
   `, "session = null; sessionError = {code:'network_error',message:'网络不可用'};");
 });
 
+test("simultaneous first-use requests share one anonymous sign-in", () => {
+  run(`
+    await Promise.all([ensureFeedbackUserSession(),ensureFeedbackUserSession()]);
+    assert.equal(anonymousSignIns,1);
+  `, "session = null; sessionError = {code:'unauthenticated',message:'credentials not found'};");
+});
+
 test("administrator role lookup errors never grant administrator access", () => {
   run(`
     const challenge = await requestFeedbackAdminCode("admin@example.test");
