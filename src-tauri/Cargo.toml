@@ -1,6 +1,6 @@
 [package]
 name = "lijin-book"
-version = "0.4.49"
+version = "0.4.50"
 description = "Offline family gift ledger for Windows"
 authors = ["Codex"]
 edition = "2021"
