@@ -45,10 +45,8 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState("");
   const [replyStatus, setReplyStatus] = useState<FeedbackStatus>("in_progress");
-  const [expandedReply, setExpandedReply] = useState<string | null>(focusFeedbackId ?? null);
   const dialogRoot = useRef<HTMLElement>(null);
   const positionedReply = useRef<string | null>(null);
-  useEffect(() => { if (focusFeedbackId) setExpandedReply(focusFeedbackId); }, [focusFeedbackId]);
 
   const load = useCallback(async (forceAnonymous = false) => {
     setLoading(true);
@@ -73,17 +71,32 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
   useEffect(() => { void load(); }, [load, refreshKey]);
   const readCallback = useRef(onReplyRead); readCallback.current = onReplyRead;
   useEffect(() => {
-    if (!expandedReply) { positionedReply.current = null; return; }
-    const latest = replies[expandedReply]?.reduce<string | null>((stamp, item) => !stamp || Date.parse(item.created_at) > Date.parse(stamp) ? item.created_at : stamp, null);
-    const row = Array.from(dialogRoot.current?.querySelectorAll<HTMLElement>("[data-feedback-id]") ?? []).find(item => item.dataset.feedbackId === expandedReply);
+    if (!focusFeedbackId) return;
+    const row = Array.from(dialogRoot.current?.querySelectorAll<HTMLElement>("[data-feedback-id]") ?? []).find(item => item.dataset.feedbackId === focusFeedbackId);
     const target = row?.querySelectorAll<HTMLElement>(".feedback-reply");
-    const key = `${expandedReply}:${latest}`;
+    const latest = replies[focusFeedbackId]?.at(-1)?.created_at;
+    const key = `${focusFeedbackId}:${latest}`;
     if (latest && target?.length && positionedReply.current !== key) {
       target[target.length - 1].scrollIntoView?.({ block: "start", inline: "nearest" });
       positionedReply.current = key;
-      readCallback.current?.(expandedReply, latest);
     }
-  }, [expandedReply, replies]);
+  }, [focusFeedbackId, replies]);
+  useEffect(() => {
+    if (adminSession || typeof IntersectionObserver === "undefined") return;
+    const observer = new IntersectionObserver(entries => {
+      if (document.visibilityState === "hidden") return;
+      for (const entry of entries) {
+        const element = entry.target as HTMLElement;
+        if (entry.isIntersecting && element.dataset.feedbackId && element.dataset.replyTime)
+          readCallback.current?.(element.dataset.feedbackId, element.dataset.replyTime);
+      }
+    }, { threshold: 0.01 });
+    const targets = Array.from(dialogRoot.current?.querySelectorAll<HTMLElement>(".feedback-reply[data-reply-time]") ?? []);
+    const observeVisible = () => { if (document.visibilityState !== "hidden") { observer.disconnect(); targets.forEach(item => observer.observe(item)); } };
+    observeVisible();
+    document.addEventListener("visibilitychange", observeVisible);
+    return () => { document.removeEventListener("visibilitychange", observeVisible); observer.disconnect(); };
+  }, [replies, adminSession]);
 
   const submit = async () => {
     setSubmitting(true);
@@ -122,11 +135,10 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
       {items.map(item => {
         const unread = !adminSession && isReplyUnread?.(item.id, item.last_replied_at);
         return <article className={`feedback-item ${unread ? "has-unread-reply" : ""}`} key={item.id} data-feedback-id={item.id} data-unread={unread ? "true" : undefined}>
-          <div className="feedback-item-heading"><strong>{feedbackCategoryLabel(item.category)}</strong><span className={`feedback-status ${item.status}`}>{feedbackStatusLabel(item.status)}</span>{unread && <span className="message-unread-label">新回复</span>}</div>
-          <p className="feedback-version">{adminSession ? `${item.app_version} · ` : ""}{displayTime(item.created_at)}</p><p>{item.content}</p>
-          {(replies[item.id]?.length ?? 0) > 0 && <button type="button" className={`secondary-button compact feedback-open-replies ${unread ? "has-unread" : ""}`} aria-expanded={expandedReply === item.id} onClick={() => setExpandedReply(value => value === item.id ? null : item.id)}>{expandedReply === item.id ? "收起回复" : "查看回复"}{unread ? " · 有新回复" : `（${replies[item.id].length}）`}</button>}
-          {expandedReply === item.id && (replies[item.id] ?? []).map(replyItem => <div className="feedback-reply" key={replyItem.id}><strong>管理员回复</strong><p>{replyItem.content}</p><span>{displayTime(replyItem.created_at)}</span></div>)}
-          {adminSession && <div className="feedback-reply-actions">{replyingId === item.id ? <><select value={replyStatus} onChange={event => setReplyStatus(event.target.value as FeedbackStatus)}><option value="in_progress">处理中</option><option value="resolved">已处理</option><option value="open">待处理</option></select><textarea value={replyContent} onChange={event => setReplyContent(event.target.value)} maxLength={4000} placeholder="填写管理员回复" /><div><button className="secondary-button compact" type="button" onClick={() => { setReplyingId(null); setReplyContent(""); }}>取消</button><button className="primary-button compact" type="button" disabled={!replyContent.trim() || submitting} onClick={() => void reply(item.id)}>发送回复</button></div></> : <button className="secondary-button compact" type="button" disabled={submitting} onClick={() => { setReplyingId(item.id); setReplyStatus(item.status); }}>回复并更新状态</button>}</div>}
+          <div className="feedback-item-heading"><strong>{feedbackCategoryLabel(item.category)}</strong><div className="feedback-badges">{(replies[item.id]?.length ?? 0) > 0 && <span className="feedback-status replied">已回复</span>}<span className={`feedback-status ${item.status}`}>{feedbackStatusLabel(item.status)}</span>{unread && <span className="message-unread-label">新回复</span>}</div></div>
+          <p className="feedback-user-content">{item.content}</p><p className="feedback-version">{item.app_version && <span>版本 {item.app_version}</span>}<span>{displayTime(item.created_at)}</span></p>
+          {(replies[item.id] ?? []).map((replyItem, index, all) => <div className="feedback-reply" key={replyItem.id} data-feedback-id={item.id} data-reply-time={index === all.length - 1 ? replyItem.created_at : undefined}><strong>管理员回复</strong><p>{replyItem.content}</p><span>{displayTime(replyItem.created_at)}</span></div>)}
+          {adminSession && <div className="feedback-reply-actions">{replyingId === item.id ? <><label>回复后状态<select value={replyStatus} onChange={event => setReplyStatus(event.target.value as FeedbackStatus)}><option value="in_progress">处理中</option><option value="resolved">已处理</option><option value="open">待处理</option></select></label><textarea value={replyContent} onChange={event => setReplyContent(event.target.value)} maxLength={4000} placeholder="填写管理员回复" /><div><button className="secondary-button compact" type="button" onClick={() => { setReplyingId(null); setReplyContent(""); }}>取消</button><button className="primary-button compact" type="button" disabled={!replyContent.trim() || submitting} onClick={() => void reply(item.id)}>发送回复</button></div></> : <button className="secondary-button compact" type="button" disabled={submitting} onClick={() => { setReplyingId(item.id); setReplyStatus(item.status); }}>回复并更新状态</button>}</div>}
         </article>;
       })}
     </section>

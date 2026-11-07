@@ -7,6 +7,7 @@ import {writeFile,unlink} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 const dom=new JSDOM('<!doctype html><body></body>',{url:'https://local.test',pretendToBeVisual:true});
 Object.assign(globalThis,{window:dom.window,document:dom.window.document,HTMLElement:dom.window.HTMLElement,IS_REACT_ACT_ENVIRONMENT:true});
+globalThis.IntersectionObserver=class { constructor(callback){this.callback=callback;this.targets=[];globalThis.__observer=this;} observe(target){this.targets.push(target);} disconnect(){} };
 const {createRoot}=await import('react-dom/client');
 const bundled=await build({stdin:{contents:'export * from "./src/hooks/useMessages";export * from "./src/components/MessageCenter";',resolveDir:fileURLToPath(new URL('..',import.meta.url)),loader:'tsx'},bundle:true,write:false,platform:'node',format:'esm',jsx:'automatic',plugins:[{name:'message-cloud-boundary',setup(b){
  b.onResolve({filter:/^[^./]/},args=>({path:import.meta.resolve(args.path),external:true}));
@@ -21,7 +22,7 @@ const bundled=await build({stdin:{contents:'export * from "./src/hooks/useMessag
  export const listFeedback=async()=>globalThis.__feedback;
  export const listFeedbackReplies=async()=>globalThis.__replies;
  export const feedbackCategoryLabel=()=>"问题反馈";export const feedbackStatusLabel=()=>"待处理";
- export const submitFeedback=async()=>{};export const replyToFeedback=async()=>{};export const requestFeedbackAdminCode=async()=>({verify:async()=>{}});
+ export const submitFeedback=async()=>{};export const replyToFeedback=async(id,content,status)=>{globalThis.__sent={id,content,status};};export const requestFeedbackAdminCode=async()=>({verify:async()=>{}});
  `}));
 }}]});
 const path=new URL(`./.messages-${process.pid}.mjs`,import.meta.url);await writeFile(path,bundled.outputFiles[0].text);
@@ -39,21 +40,33 @@ test('first announcement opens once, closing retains unread and explicit read su
  globalThis.__announcements=[{id:'software-guide',title:'新的运行说明',body:'说明已更新',revision:2,published_at:'2026-11-04T10:00:00Z'}];
  view=await mount();try{assert.match(view.node.textContent,/新的运行说明/);assert.ok(view.node.querySelector('[data-unread="true"]'));}finally{await view.close();}
 });
-test('reply unread survives opening feedback and clears only when the actual reply is expanded',async()=>{
+test('replies are visible immediately and unread clears only when the reply becomes visible',async()=>{
  reset();guideRead();globalThis.__replyStatus=[{id:'f1',last_replied_at:'2026-11-04T10:00:00Z'}];
  globalThis.__feedback=[{id:'f1',category:'problem',content:'示例问题',status:'open',app_version:'test',created_at:'2026-11-04T09:00:00Z',last_replied_at:'2026-11-04T10:00:00Z'}];
  globalThis.__replies=[{id:'r1',feedback_id:'f1',content:'管理员已回复',created_at:'2026-11-04T10:00:00Z'}];
- const view=await mount();try{assert.match(view.node.textContent,/收到管理员新回复/);await click(button(view.node,'问题反馈'));assert.ok(view.node.querySelector('.feedback-workbench'));assert.equal(view.node.querySelector('.modal-backdrop'),null);assert.ok(view.node.querySelector('[data-unread="true"]'));assert.doesNotMatch(view.node.textContent,/管理员已回复/);await click(button(view.node,'查看回复'));assert.match(view.node.textContent,/管理员已回复/);assert.equal(view.node.querySelector('[data-unread="true"]'),null);}finally{await view.close();}
+ const view=await mount();try{assert.match(view.node.textContent,/收到管理员新回复/);await click(button(view.node,'问题反馈'));assert.ok(view.node.querySelector('.feedback-workbench'));assert.equal(view.node.querySelector('.modal-backdrop'),null);assert.ok(view.node.querySelector('[data-unread="true"]'));assert.match(view.node.textContent,/管理员已回复/);assert.equal(button(view.node,'查看回复'),undefined);await act(async()=>globalThis.__observer.callback(globalThis.__observer.targets.map(target=>({target,isIntersecting:true}))));assert.equal(view.node.querySelector('[data-unread="true"]'),null);}finally{await view.close();}
 });
 test('administrator saves drafts without publishing and publishes only through the explicit action',async()=>{
  reset();globalThis.__admin=true;const view=await mount();try{await click(button(view.node,'管理公告'));await input(view.node.querySelector('input[name="announcement-title"]'),'运行说明');await input(view.node.querySelector('textarea[name="announcement-body"]'),'这是新的公告内容');await click(button(view.node,'保存草稿'));assert.equal(globalThis.__saves,1);assert.equal(globalThis.__publishes,0);assert.equal(globalThis.__announcements.length,0);await click(button(view.node,'发布公告'));assert.equal(globalThis.__publishes,1);assert.equal(globalThis.__announcements[0].body,'这是新的公告内容');assert.equal(JSON.parse(window.localStorage.getItem('lijinbook.messages.read.v1')).announcements['draft-new'],2);}finally{await view.close();}
+});
+test('a reply remains unread while the application is hidden',async()=>{
+ reset();guideRead();const stamp='2026-11-07T10:00:00Z';globalThis.__replyStatus=[{id:'f1',last_replied_at:stamp}];
+ globalThis.__feedback=[{id:'f1',category:'problem',content:'问题',status:'open',created_at:stamp,last_replied_at:stamp}];
+ globalThis.__replies=[{id:'r1',feedback_id:'f1',content:'答复',created_at:stamp}];
+ const view=await mount();try{await click(button(view.node,'问题反馈'));Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});await act(async()=>globalThis.__observer.callback(globalThis.__observer.targets.map(target=>({target,isIntersecting:true}))));assert.ok(view.node.querySelector('[data-unread="true"]'));Object.defineProperty(document,'visibilityState',{configurable:true,value:'visible'});await act(async()=>{document.dispatchEvent(new window.Event('visibilitychange'));globalThis.__observer.callback(globalThis.__observer.targets.map(target=>({target,isIntersecting:true})));});assert.equal(view.node.querySelector('[data-unread="true"]'),null);}finally{delete document.visibilityState;await view.close();}
 });
 test('a reply reminder scrolls directly to the older feedback reply before clearing unread',async()=>{
  reset();guideRead();const stamp='2026-11-04T10:00:00Z';globalThis.__replyStatus=[{id:'older',last_replied_at:stamp}];
  globalThis.__feedback=[{id:'newer',category:'problem',content:'较新问题',status:'open',created_at:stamp,last_replied_at:null},{id:'older',category:'problem',content:'较早问题',status:'open',created_at:'2026-10-01T10:00:00Z',last_replied_at:stamp}];
  globalThis.__replies=[{id:'r1',content:'较早问题的新回复',created_at:stamp}];
  const previous=window.HTMLElement.prototype.scrollIntoView;const positioned=[];window.HTMLElement.prototype.scrollIntoView=function(){positioned.push(this.closest('[data-feedback-id]')?.dataset.feedbackId);};
- const view=await mount();try{await click(button(view.node,'查看新回复'));assert.deepEqual(positioned,['older']);assert.match(view.node.textContent,/较早问题的新回复/);assert.equal(view.node.querySelector('[data-unread="true"]'),null);}finally{await view.close();window.HTMLElement.prototype.scrollIntoView=previous;}
+ const view=await mount();try{await click(button(view.node,'查看新回复'));assert.deepEqual(positioned,['older']);assert.match(view.node.textContent,/较早问题的新回复/);assert.ok(view.node.querySelector('[data-unread="true"]'));await act(async()=>globalThis.__observer.callback(globalThis.__observer.targets.map(target=>({target,isIntersecting:true}))));assert.equal(view.node.querySelector('[data-unread="true"]'),null);}finally{await view.close();window.HTMLElement.prototype.scrollIntoView=previous;}
+});
+test('administrator sees earlier replies and keeps the chosen issue status when replying',async()=>{
+ reset();guideRead();globalThis.__admin=true;globalThis.__sent=null;
+ globalThis.__feedback=[{id:'f1',category:'problem',content:'问题内容',status:'open',app_version:'0.4.56',created_at:'2026-11-07T09:00:00Z',last_replied_at:'2026-11-07T10:00:00Z'}];
+ globalThis.__replies=[{id:'r1',feedback_id:'f1',content:'之前的答复',created_at:'2026-11-07T10:00:00Z'}];
+ const view=await mount();try{await click(button(view.node,'问题反馈'));assert.match(view.node.textContent,/之前的答复/);assert.match(view.node.textContent,/已回复/);assert.doesNotMatch(view.node.textContent,/查看回复/);const row=view.node.querySelector('.feedback-item');assert.ok(row.querySelector('.feedback-user-content').compareDocumentPosition(row.querySelector('.feedback-version')) & window.Node.DOCUMENT_POSITION_FOLLOWING);assert.match(row.querySelector('.feedback-version').textContent,/版本 0\.4\.56/);assert.doesNotMatch(row.querySelector('.feedback-reply').textContent,/版本/);await click(button(view.node,'回复并更新状态'));assert.equal(view.node.querySelector('.feedback-reply-actions select').value,'open');await input(view.node.querySelector('.feedback-reply-actions textarea'),'新的答复');await click(button(view.node,'发送回复'));assert.equal(globalThis.__sent.status,'open');}finally{await view.close();}
 });
 test('announcement administrator entry opens email verification without granting permissions',async()=>{
  reset();const view=await mount();try{await click(button(view.node,'管理员登录'));assert.ok(view.node.querySelector('input[type="email"]'));assert.equal(view.node.querySelector('input[type="password"]'),null);assert.doesNotMatch(view.node.textContent,/保存草稿/);}finally{await view.close();}
