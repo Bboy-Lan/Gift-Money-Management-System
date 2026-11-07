@@ -20,6 +20,11 @@ test('reply read state follows the actual opened reply rather than polling or wa
  state=markReplyRead(state,item.id,'2026-11-04T09:00:00Z');assert.equal(replyUnread(next,state),true);
  assert.equal(replyUnread({id:'new',last_replied_at:null},state),false);
 });
+test('status notifications retain independent monotonic read state',()=>{
+ let state=emptyMessageState();const item={id:'f',last_replied_at:null,status_changed_at:'2026-11-07T12:00:00Z'};
+ assert.equal(api.statusUnread(item,state),true);state=api.markStatusRead(state,item.id,item.status_changed_at);assert.equal(api.statusUnread(item,state),false);
+ const next={...item,status_changed_at:'2026-11-07T12:01:00Z'};assert.equal(api.statusUnread(next,state),true);state=api.markStatusRead(state,item.id,'2026-11-07T11:00:00Z');assert.equal(api.statusUnread(next,state),true);
+});
 test('read state survives restart and handles malformed or unavailable storage',()=>{
  const values=new Map();const storage={getItem:key=>values.get(key)||null,setItem:(key,value)=>values.set(key,value)};
  const state=markAnnouncementRead(emptyMessageState(),BUILTIN_GUIDE);saveMessageState(state,storage);

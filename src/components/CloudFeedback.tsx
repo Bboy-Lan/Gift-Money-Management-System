@@ -10,6 +10,7 @@ import {
   replyToFeedback,
   submitFeedback,
   switchToAnonymousFeedback,
+  updateFeedbackStatus,
   type CloudFeedback,
   type CloudFeedbackReply,
   type FeedbackCategory,
@@ -26,10 +27,11 @@ export function CloudFeedbackPanel({ appVersion }: { appVersion: string }) {
   return <section className="settings-panel feedback-settings-panel"><div><strong>意见反馈</strong><p>无需注册，发送反馈或查看回复时联网。仅发送你填写的反馈内容、软件版本和处理状态。不会上传礼金库文件、人物、金额、地址或本机路径。</p></div><button className="secondary-button compact" type="button" onClick={() => setOpen(true)}><MessageSquare size={14} />提交或查看反馈</button>{open && <CloudFeedbackModal appVersion={appVersion} onClose={() => setOpen(false)} />}</section>;
 }
 
-export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onReplyRead, isReplyUnread, focusFeedbackId, refreshKey, initialAdminLogin = false, inline = false }: {
+export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onReplyRead, isReplyUnread, onStatusRead, isStatusUnread, focusFeedbackId, focusFeedbackKind = "reply", refreshKey, initialAdminLogin = false, inline = false }: {
   appVersion: string; onClose: () => void; onSessionChanged?: () => void;
   onReplyRead?: (id: string, timestamp: string) => void; isReplyUnread?: (id: string, timestamp: string | null) => boolean;
-  focusFeedbackId?: string; refreshKey?: string;
+  onStatusRead?: (id: string, timestamp: string) => void; isStatusUnread?: (id: string, timestamp: string | null) => boolean;
+  focusFeedbackId?: string; focusFeedbackKind?: "reply" | "status"; refreshKey?: string;
   initialAdminLogin?: boolean; inline?: boolean;
 }) {
   const [items, setItems] = useState<CloudFeedback[]>([]);
@@ -44,7 +46,8 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
   const [content, setContent] = useState("");
   const [replyingId, setReplyingId] = useState<string | null>(null);
   const [replyContent, setReplyContent] = useState("");
-  const [replyStatus, setReplyStatus] = useState<FeedbackStatus>("in_progress");
+  const [replyStatus, setReplyStatus] = useState<FeedbackStatus | null>(null);
+  const [statusOnly, setStatusOnly] = useState(false);
   const dialogRoot = useRef<HTMLElement>(null);
   const positionedReply = useRef<string | null>(null);
 
@@ -70,9 +73,11 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
 
   useEffect(() => { void load(); }, [load, refreshKey]);
   const readCallback = useRef(onReplyRead); readCallback.current = onReplyRead;
+  const readStatusCallback = useRef(onStatusRead); readStatusCallback.current = onStatusRead;
   useEffect(() => {
     if (!focusFeedbackId) return;
     const row = Array.from(dialogRoot.current?.querySelectorAll<HTMLElement>("[data-feedback-id]") ?? []).find(item => item.dataset.feedbackId === focusFeedbackId);
+    if (focusFeedbackKind === "status" && row) { const key = `status:${focusFeedbackId}`; if (positionedReply.current !== key) { row.scrollIntoView?.({ block: "start", inline: "nearest" }); positionedReply.current = key; } return; }
     const target = row?.querySelectorAll<HTMLElement>(".feedback-reply");
     const latest = replies[focusFeedbackId]?.at(-1)?.created_at;
     const key = `${focusFeedbackId}:${latest}`;
@@ -80,7 +85,7 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
       target[target.length - 1].scrollIntoView?.({ block: "start", inline: "nearest" });
       positionedReply.current = key;
     }
-  }, [focusFeedbackId, replies]);
+  }, [focusFeedbackId, focusFeedbackKind, replies, items]);
   useEffect(() => {
     if (adminSession || typeof IntersectionObserver === "undefined") return;
     const observer = new IntersectionObserver(entries => {
@@ -89,14 +94,16 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
         const element = entry.target as HTMLElement;
         if (entry.isIntersecting && element.dataset.feedbackId && element.dataset.replyTime)
           readCallback.current?.(element.dataset.feedbackId, element.dataset.replyTime);
+        if (entry.isIntersecting && element.dataset.feedbackId && element.dataset.statusTime)
+          readStatusCallback.current?.(element.dataset.feedbackId, element.dataset.statusTime);
       }
     }, { threshold: 0.01 });
-    const targets = Array.from(dialogRoot.current?.querySelectorAll<HTMLElement>(".feedback-reply[data-reply-time]") ?? []);
+    const targets = Array.from(dialogRoot.current?.querySelectorAll<HTMLElement>(".feedback-reply[data-reply-time], .feedback-status[data-status-time]") ?? []);
     const observeVisible = () => { if (document.visibilityState !== "hidden") { observer.disconnect(); targets.forEach(item => observer.observe(item)); } };
     observeVisible();
     document.addEventListener("visibilitychange", observeVisible);
     return () => { document.removeEventListener("visibilitychange", observeVisible); observer.disconnect(); };
-  }, [replies, adminSession]);
+  }, [replies, items, adminSession]);
 
   const submit = async () => {
     setSubmitting(true);
@@ -111,6 +118,7 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
     } catch (reason) { setError(String(reason).replace(/^Error:\s*/, "")); } finally { setSubmitting(false); }
   };
   const reply = async (feedbackId: string) => {
+    if (!replyStatus) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -121,6 +129,12 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
       await load();
       onSessionChanged?.();
     } catch (reason) { setError(String(reason).replace(/^Error:\s*/, "")); } finally { setSubmitting(false); }
+  };
+  const saveStatus = async (feedbackId: string) => {
+    if (!replyStatus) return;
+    setSubmitting(true); setError(null); setNotice(null);
+    try { await updateFeedbackStatus(feedbackId, replyStatus); setReplyingId(null); setNotice("处理状态已更新。"); await load(); onSessionChanged?.(); }
+    catch (reason) { setError(String(reason).replace(/^Error:\s*/, "")); } finally { setSubmitting(false); }
   };
 
   return <div className={inline ? "feedback-workbench" : "modal-backdrop"}><section ref={dialogRoot} className={inline ? "feedback-workbench-content" : "modal feedback-modal"} role={inline ? undefined : "dialog"} aria-modal={inline ? undefined : "true"} aria-label="问题反馈">
@@ -134,11 +148,12 @@ export function CloudFeedbackModal({ appVersion, onClose, onSessionChanged, onRe
       {!loading && items.length === 0 && <p className="field-hint">还没有反馈记录。</p>}
       {items.map(item => {
         const unread = !adminSession && isReplyUnread?.(item.id, item.last_replied_at);
-        return <article className={`feedback-item ${unread ? "has-unread-reply" : ""}`} key={item.id} data-feedback-id={item.id} data-unread={unread ? "true" : undefined}>
-          <div className="feedback-item-heading"><strong>{feedbackCategoryLabel(item.category)}</strong><div className="feedback-badges">{(replies[item.id]?.length ?? 0) > 0 && <span className="feedback-status replied">已回复</span>}<span className={`feedback-status ${item.status}`}>{feedbackStatusLabel(item.status)}</span>{unread && <span className="message-unread-label">新回复</span>}</div></div>
+        const statusIsUnread = !adminSession && isStatusUnread?.(item.id, item.status_changed_at);
+        return <article className={`feedback-item ${unread || statusIsUnread ? "has-unread-reply" : ""}`} key={item.id} data-feedback-id={item.id} data-unread={unread || statusIsUnread ? "true" : undefined}>
+          <div className="feedback-item-heading"><div className="feedback-badges"><span className={`feedback-category ${item.category}`}>{feedbackCategoryLabel(item.category)}</span>{(replies[item.id]?.length ?? 0) > 0 && <span className="feedback-status replied">已回复</span>}<span className={`feedback-status ${item.status}`} data-feedback-id={item.id} data-status-time={item.status_changed_at ?? undefined}>{feedbackStatusLabel(item.status)}</span>{statusIsUnread && <span className="message-unread-label">状态有更新</span>}{unread && <span className="message-unread-label">新回复</span>}</div></div>
           <p className="feedback-user-content">{item.content}</p><p className="feedback-version">{item.app_version && <span>版本 {item.app_version}</span>}<span>{displayTime(item.created_at)}</span></p>
           {(replies[item.id] ?? []).map((replyItem, index, all) => <div className="feedback-reply" key={replyItem.id} data-feedback-id={item.id} data-reply-time={index === all.length - 1 ? replyItem.created_at : undefined}><strong>管理员回复</strong><p>{replyItem.content}</p><span>{displayTime(replyItem.created_at)}</span></div>)}
-          {adminSession && <div className="feedback-reply-actions">{replyingId === item.id ? <><label>回复后状态<select value={replyStatus} onChange={event => setReplyStatus(event.target.value as FeedbackStatus)}><option value="in_progress">处理中</option><option value="resolved">已处理</option><option value="open">待处理</option></select></label><textarea value={replyContent} onChange={event => setReplyContent(event.target.value)} maxLength={4000} placeholder="填写管理员回复" /><div><button className="secondary-button compact" type="button" onClick={() => { setReplyingId(null); setReplyContent(""); }}>取消</button><button className="primary-button compact" type="button" disabled={!replyContent.trim() || submitting} onClick={() => void reply(item.id)}>发送回复</button></div></> : <button className="secondary-button compact" type="button" disabled={submitting} onClick={() => { setReplyingId(item.id); setReplyStatus(item.status); }}>回复并更新状态</button>}</div>}
+          {adminSession && <div className="feedback-reply-actions">{replyingId === item.id ? <><div className="feedback-status-picker" role="group" aria-label="处理状态"><span>处理状态</span><div>{([["open", "待处理"], ["in_progress", "处理中"], ["resolved", "已处理"]] as const).map(([value, label]) => <button key={value} type="button" aria-pressed={replyStatus === value} disabled={submitting || (replyStatus !== null && replyStatus !== value)} onClick={() => setReplyStatus(replyStatus === value ? null : value)}>{label}</button>)}</div><small>先取消当前选择，再选择其他状态。</small></div>{!statusOnly && <textarea value={replyContent} onChange={event => setReplyContent(event.target.value)} maxLength={4000} placeholder="填写管理员回复" />}<div><button className="secondary-button compact" type="button" onClick={() => { setReplyingId(null); setReplyContent(""); }}>取消</button><button className="primary-button compact" type="button" disabled={!replyStatus || submitting || (!statusOnly && !replyContent.trim())} onClick={() => void (statusOnly ? saveStatus(item.id) : reply(item.id))}>{statusOnly ? "保存状态" : "发送回复"}</button></div></> : <div><button className="secondary-button compact" type="button" disabled={submitting} onClick={() => { setReplyingId(item.id); setStatusOnly(false); setReplyStatus(item.status); }}>回复并更新状态</button><button className="secondary-button compact" type="button" disabled={submitting} onClick={() => { setReplyingId(item.id); setStatusOnly(true); setReplyStatus(item.status); }}>修改状态</button></div>}</div>}
         </article>;
       })}
     </section>

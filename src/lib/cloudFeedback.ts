@@ -16,6 +16,7 @@ export interface CloudFeedback {
   created_at: string;
   updated_at: string;
   last_replied_at: string | null;
+  status_changed_at: string | null;
 }
 
 export interface CloudFeedbackReply {
@@ -157,7 +158,7 @@ export async function switchToAnonymousFeedback(): Promise<{ isAdminSession: boo
 }
 
 export async function listFeedback() {
-  const result = await database().from("feedback").select("id,category,content,app_version,status,created_at,updated_at,last_replied_at").order("created_at", { ascending: false });
+  const result = await database().from("feedback").select("id,category,content,app_version,status,created_at,updated_at,last_replied_at,status_changed_at").order("created_at", { ascending: false });
   return readResult(result as CloudResult<CloudFeedback[]>);
 }
 
@@ -187,6 +188,11 @@ export async function replyToFeedback(feedbackId: string, contentInput: string, 
   ensureSuccess(await database().from("feedback").update({ status }).eq("id", feedbackId));
 }
 
+export async function updateFeedbackStatus(feedbackId: string, status: FeedbackStatus) {
+  if (!["open", "in_progress", "resolved"].includes(status)) throw new Error("处理状态无效");
+  ensureSuccess(await database().from("feedback").update({ status }).eq("id", feedbackId));
+}
+
 export async function listAnnouncements() {
   return readResult(await database().from("announcements").select("id,title,body,revision,published_at").order("published_at", { ascending: false }) as CloudResult<Announcement[]>);
 }
@@ -194,7 +200,7 @@ export async function listAnnouncementDrafts() {
   return readResult(await database().from("announcement_drafts").select("id,title,body,updated_at").order("updated_at", { ascending: false }) as CloudResult<AnnouncementDraft[]>);
 }
 export async function listFeedbackReplyStatus() {
-  return readResult(await database().from("feedback").select("id,last_replied_at").order("last_replied_at", { ascending: false }) as CloudResult<FeedbackReplyStatus[]>);
+  return readResult(await database().from("feedback").select("id,last_replied_at,status,status_changed_at").order("last_replied_at", { ascending: false }) as CloudResult<FeedbackReplyStatus[]>);
 }
 export async function saveAnnouncementDraft(input: { id?: string; title: string; body: string }) {
   const title = input.title.trim(), body = input.body.trim();
