@@ -1,0 +1,8 @@
+{
+  "name": "lijin-feedback-function",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "dependencies": { "@cloudbase/node-sdk": "3.18.7" },
+  "overrides": { "axios": "0.34.0", "lodash.unset": "4.18.0" }
+}

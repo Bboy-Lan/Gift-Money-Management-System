@@ -6,7 +6,7 @@ import test from "node:test";
 import { transform } from "esbuild";
 
 const source = await readFile(new URL("../src/lib/cloudFeedback.ts", import.meta.url), "utf8");
-const compiled = (await transform(source, { loader: "ts", format: "esm" })).code.replace('import { installFeedbackTransport } from "./feedbackTransport";', 'const installFeedbackTransport = () => {};');
+const compiled = (await transform(source, { loader: "ts", format: "esm" })).code.replace('import { installFeedbackTransport } from "./feedbackTransport";', 'const installFeedbackTransport = () => {};').replace('import("./classicFeedback")', 'Promise.resolve({createClassicFeedback: () => ({adminStatus: async () => { rpcCalls.push("feedback_admin_status"); if (roleError) throw new Error(roleError.message); const rows=rolePayload ?? [{is_admin:authorized}]; return Array.isArray(rows) && rows.length === 1 ? rows[0] : {}; }})})');
 const root = fileURLToPath(new URL("..", import.meta.url));
 
 function run(assertions, setup = "") {

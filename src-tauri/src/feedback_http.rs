@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 const HOST: &str = "cloud-ynnu-d6gs8ekf7dbcbe80e.api.tcloudbasegateway.com";
+const CLASSIC_HOST: &str = "cloud-yunda-d5gxrar1s14b2ee0d.api.tcloudbasegateway.com";
 const MAX_BODY: usize = 32 * 1024;
 const MAX_RESPONSE: usize = 4 * 1024 * 1024;
 
@@ -26,24 +27,28 @@ pub struct FeedbackResponse {
 
 fn validate_request(input: &FeedbackRequest) -> Result<(Url, Method, HeaderMap), String> {
     let url = Url::parse(&input.url).map_err(|_| "反馈地址无效")?;
-    let allowed_path = url.path().starts_with("/auth/v1/")
-        || matches!(
-            url.path(),
-            "/v1/rdb/rest/feedback"
-                | "/v1/rdb/rest/feedback_replies"
-                | "/v1/rdb/rest/rpc/feedback_admin_status"
-                | "/v1/rdb/rest/announcements"
-                | "/v1/rdb/rest/announcement_drafts"
-                | "/v1/rdb/rest/rpc/save_announcement_draft"
-                | "/v1/rdb/rest/rpc/publish_announcement"
-        );
+    let old_allowed = url.host_str() == Some(HOST)
+        && (url.path().starts_with("/auth/v1/")
+            || matches!(
+                url.path(),
+                "/v1/rdb/rest/feedback"
+                    | "/v1/rdb/rest/feedback_replies"
+                    | "/v1/rdb/rest/rpc/feedback_admin_status"
+                    | "/v1/rdb/rest/rpc/feedback_recycle"
+                    | "/v1/rdb/rest/rpc/feedback_recycled_list"
+                    | "/v1/rdb/rest/announcements"
+                    | "/v1/rdb/rest/announcement_drafts"
+                    | "/v1/rdb/rest/rpc/save_announcement_draft"
+                    | "/v1/rdb/rest/rpc/publish_announcement"
+            ));
+    let classic_allowed = url.host_str() == Some(CLASSIC_HOST)
+        && (url.path().starts_with("/auth/v1/") || url.path() == "/v1/functions/lijin_feedback_v1");
     if url.scheme() != "https"
-        || url.host_str() != Some(HOST)
         || !url.username().is_empty()
         || url.password().is_some()
         || url.port_or_known_default() != Some(443)
         || url.fragment().is_some()
-        || !allowed_path
+        || !(old_allowed || classic_allowed)
         || input.url.len() > 16 * 1024
     {
         return Err("反馈地址超出允许范围".into());
@@ -169,9 +174,16 @@ mod tests {
             "/v1/rdb/rest/feedback?select=id",
             "/v1/rdb/rest/feedback_replies",
             "/v1/rdb/rest/rpc/feedback_admin_status",
+            "/v1/rdb/rest/rpc/feedback_recycle",
+            "/v1/rdb/rest/rpc/feedback_recycled_list",
         ] {
             assert!(validate_request(&request(path)).is_ok(), "{path}");
         }
+        let mut classic = request("/v1/functions/lijin_feedback_v1");
+        classic.url = format!("https://{CLASSIC_HOST}/v1/functions/lijin_feedback_v1");
+        assert!(validate_request(&classic).is_ok());
+        classic.url = format!("https://{CLASSIC_HOST}/v1/functions/another_app");
+        assert!(validate_request(&classic).is_err());
         for url in [
             "http://cloud-ynnu-d6gs8ekf7dbcbe80e.api.tcloudbasegateway.com/auth/v1/token",
             "https://evil.example/auth/v1/token",

@@ -11,7 +11,9 @@ test("isolated delivery versions, identity, standard release policy and CSP", as
   const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
   const config = JSON.parse(await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"));
   const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
-  assert.equal(pkg.version, "0.4.58");
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
+  const changelog = await readFile(join(root, "CHANGELOG.md"), "utf8");
+  assert.ok(changelog.includes(`## ${pkg.version} -`));
   assert.equal(config.version, pkg.version);
   assert.ok(cargo.includes(`version = "${pkg.version}"`));
   assert.equal(pkg.devDependencies.jsdom, "26.1.0");

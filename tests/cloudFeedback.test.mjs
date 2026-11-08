@@ -46,7 +46,7 @@ test("feedback initializes once on first session use and reuses its authenticati
     await ensureFeedbackUserSession();
     await switchToAnonymousFeedback();
     assert.deepEqual(calls, [
-      ["init", { env: "cloud-ynnu-d6gs8ekf7dbcbe80e", region: "ap-shanghai", persistence: "local" }],
+      ["init", { env: "cloud-yunda-d5gxrar1s14b2ee0d", region: "ap-shanghai", persistence: "local" }],
       "auth", "getSession", "getSession", "signOut", "getSession"
     ]);
   `], { cwd: projectRoot, encoding: "utf8", timeout: 5000, windowsHide: true });

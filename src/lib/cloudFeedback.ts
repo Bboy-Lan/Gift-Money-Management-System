@@ -2,7 +2,9 @@ import cloudbase from "@cloudbase/js-sdk";
 import { installFeedbackTransport } from "./feedbackTransport";
 import type { Announcement, AnnouncementDraft, FeedbackReplyStatus } from "./messageState";
 
-const CLOUDBASE_ENV_ID = "cloud-ynnu-d6gs8ekf7dbcbe80e";
+// The original backend remains intact for future historical-data migration.
+const USE_CLASSIC_FEEDBACK = true;
+const CLOUDBASE_ENV_ID = USE_CLASSIC_FEEDBACK ? "cloud-yunda-d5gxrar1s14b2ee0d" : "cloud-ynnu-d6gs8ekf7dbcbe80e";
 
 export type FeedbackCategory = "suggestion" | "problem" | "other";
 export type FeedbackStatus = "open" | "in_progress" | "resolved";
@@ -25,6 +27,7 @@ export interface CloudFeedbackReply {
   content: string;
   created_at: string;
 }
+export interface RecycledFeedback { id: string; category: FeedbackCategory; content: string; deleted_at: string }
 
 type CloudResult<T> = { data: T | null; error: { message?: string } | null };
 type CloudQuery = {
@@ -63,6 +66,10 @@ function client() {
 
 function database(): CloudDatabase {
   return (client().app as unknown as { rdb: () => CloudDatabase }).rdb();
+}
+async function classic() {
+  const { createClassicFeedback } = await import("./classicFeedback");
+  return createClassicFeedback(client().app as unknown as Parameters<typeof createClassicFeedback>[0]);
 }
 
 function ensureSuccess<T>(result: CloudResult<T>) {
@@ -119,6 +126,11 @@ async function restoreFeedbackUserSession(): Promise<{ isAdminSession: boolean }
 }
 
 async function isFeedbackAdmin() {
+  if (USE_CLASSIC_FEEDBACK) {
+    const result = await (await classic()).adminStatus();
+    if (typeof result?.is_admin !== "boolean") throw new Error("管理员权限响应无效，请稍后重试");
+    return result.is_admin;
+  }
   const rows = readResult(await database().rpc<{ is_admin: boolean }[]>("feedback_admin_status"));
   if (!Array.isArray(rows) || rows.length !== 1 || typeof rows[0]?.is_admin !== "boolean") {
     throw new Error("管理员权限响应无效，请稍后重试");
@@ -158,11 +170,13 @@ export async function switchToAnonymousFeedback(): Promise<{ isAdminSession: boo
 }
 
 export async function listFeedback() {
+  if (USE_CLASSIC_FEEDBACK) return (await classic()).list();
   const result = await database().from("feedback").select("id,category,content,app_version,status,created_at,updated_at,last_replied_at,status_changed_at").order("created_at", { ascending: false });
   return readResult(result as CloudResult<CloudFeedback[]>);
 }
 
 export async function listFeedbackReplies(feedbackId: string) {
+  if (USE_CLASSIC_FEEDBACK) return (await classic()).replies(feedbackId);
   const result = await database().from("feedback_replies").select("id,feedback_id,content,created_at").eq("feedback_id", feedbackId).order("created_at", { ascending: true });
   return readResult(result as CloudResult<CloudFeedbackReply[]>);
 }
@@ -171,6 +185,7 @@ export async function submitFeedback(input: { category: FeedbackCategory; conten
   const content = normalizeFeedbackContent(input.content);
   if (!content) throw new Error("请填写反馈内容");
   if (content.length > 4000) throw new Error("反馈内容不能超过 4000 个字符");
+  if (USE_CLASSIC_FEEDBACK) { await (await classic()).submit({...input, content}); return; }
   const result = await database().from("feedback").insert({
     category: input.category,
     content,
@@ -184,33 +199,55 @@ export async function replyToFeedback(feedbackId: string, contentInput: string, 
   const content = normalizeFeedbackContent(contentInput);
   if (!content) throw new Error("请填写回复内容");
   if (content.length > 4000) throw new Error("回复内容不能超过 4000 个字符");
+  if (USE_CLASSIC_FEEDBACK) { await (await classic()).reply(feedbackId,content,status); return; }
   ensureSuccess(await database().from("feedback_replies").insert({ feedback_id: feedbackId, content }));
   ensureSuccess(await database().from("feedback").update({ status }).eq("id", feedbackId));
 }
 
 export async function updateFeedbackStatus(feedbackId: string, status: FeedbackStatus) {
   if (!["open", "in_progress", "resolved"].includes(status)) throw new Error("处理状态无效");
+  if (USE_CLASSIC_FEEDBACK) { await (await classic()).status(feedbackId,status); return; }
   ensureSuccess(await database().from("feedback").update({ status }).eq("id", feedbackId));
 }
 
+export async function deleteFeedback(feedbackId: string) {
+  if (USE_CLASSIC_FEEDBACK) { await (await classic()).recycle(feedbackId); return; }
+  const rows = readResult(await database().rpc<{ success: boolean }[]>("feedback_recycle", { p_id: feedbackId, p_restore: false }));
+  if (!rows[0]?.success) throw new Error("反馈不存在或已被删除，请刷新后重试");
+}
+export async function restoreFeedback(feedbackId: string) {
+  if (USE_CLASSIC_FEEDBACK) { await (await classic()).restore(feedbackId); return; }
+  const rows = readResult(await database().rpc<{ success: boolean }[]>("feedback_recycle", { p_id: feedbackId, p_restore: true }));
+  if (!rows[0]?.success) throw new Error("反馈不存在或已恢复，请刷新后重试");
+}
+export async function listRecycledFeedback() {
+  if (USE_CLASSIC_FEEDBACK) return (await classic()).recycled();
+  return readResult(await database().rpc<RecycledFeedback[]>("feedback_recycled_list"));
+}
+
 export async function listAnnouncements() {
+  if (USE_CLASSIC_FEEDBACK) return (await classic()).announcements();
   return readResult(await database().from("announcements").select("id,title,body,revision,published_at").order("published_at", { ascending: false }) as CloudResult<Announcement[]>);
 }
 export async function listAnnouncementDrafts() {
+  if (USE_CLASSIC_FEEDBACK) return (await classic()).drafts();
   return readResult(await database().from("announcement_drafts").select("id,title,body,updated_at").order("updated_at", { ascending: false }) as CloudResult<AnnouncementDraft[]>);
 }
 export async function listFeedbackReplyStatus() {
+  if (USE_CLASSIC_FEEDBACK) return (await classic()).replyStatus();
   return readResult(await database().from("feedback").select("id,last_replied_at,status,status_changed_at").order("last_replied_at", { ascending: false }) as CloudResult<FeedbackReplyStatus[]>);
 }
 export async function saveAnnouncementDraft(input: { id?: string; title: string; body: string }) {
   const title = input.title.trim(), body = input.body.trim();
   if (!title || title.length > 120) throw new Error("公告标题须为 1 至 120 个字符");
   if (!body || body.length > 8000) throw new Error("公告正文须为 1 至 8000 个字符");
+  if (USE_CLASSIC_FEEDBACK) return (await classic()).saveDraft({...input,title,body});
   const rows = readResult(await database().rpc<AnnouncementDraft[]>("save_announcement_draft", { p_id: input.id ?? null, p_title: title, p_body: body }));
   if (!Array.isArray(rows) || rows.length !== 1) throw new Error("公告草稿保存结果无效");
   return rows[0];
 }
 export async function publishAnnouncement(id: string) {
+  if (USE_CLASSIC_FEEDBACK) return (await classic()).publish(id);
   const rows = readResult(await database().rpc<Announcement[]>("publish_announcement", { p_id: id }));
   if (!Array.isArray(rows) || rows.length !== 1) throw new Error("公告发布结果无效");
   return rows[0];
